@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.25
+// @version      5.26
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -1709,6 +1709,226 @@
     document.body.appendChild(b);
   }
 
+  // ============ Yahoo!フリマ 面板：抓取 / 批量改价 / 批量停止 / 批量删除 ============
+  const FDB = 'mbr_fitems';     // { items:[{id,title,price,status:'OPEN'|'CLOSE',views,likes,age,thumb}], at }
+  const FQ = 'mbr_fqueue';      // { op:'price'|'stop'|'del', label, ids, prices:{id:新价}, i, running, ok, ng }
+  const FJOB = 'mbr_fjob';      // 编辑页任务 { id, op, price, token, ts, phase:'run'|'done'|'fail', msg }
+  const FOP = { price: '批量改价', stop: '批量停止', del: '批量删除' };
+
+  // ---- 编辑页：执行一件 ----
+  async function fleaEditWorker() {
+    const id = location.pathname.split('/')[2];
+    const j = GM_getValue(FJOB, null);
+    if (!j || j.id !== id || j.phase !== 'run' || Date.now() - j.ts > 3 * 60e3) return;
+    const finish = (phase, msg) => { const cur = GM_getValue(FJOB, null); if (cur && cur.token === j.token) GM_setValue(FJOB, { ...cur, phase, msg }); };
+    const isVis = e => { if (!e) return false; const r = e.getBoundingClientRect(); if (r.width <= 0 || r.height <= 0) return false;
+      for (let x = e; x && x !== document.body; x = x.parentElement) { const cs = getComputedStyle(x); if (cs.opacity === '0' || cs.visibility === 'hidden' || cs.display === 'none') return false; } return true; };
+    const btn = re => [...document.querySelectorAll('button')].find(b => re.test(b.textContent.trim()) && isVis(b) && !b.disabled);
+    const editPath = location.pathname;
+    const left = () => waitFor(() => location.pathname !== editPath, 20000);
+    try {
+      toast(`助手：${FOP[j.op]}（${id}）…`, '#f60');
+      if (!await waitFor(() => btn(/^変更する$/), 20000)) return finish('fail', '编辑页没加载出来');
+      await sleep(rand(800, 1500));
+      if (j.op === 'price') {
+        const pe = document.querySelector('input[type="tel"]');
+        if (!pe) return finish('fail', '找不到价格栏');
+        await typeLikeHuman(pe, j.price);
+        await sleep(800);
+        if (String(pe.value).replace(/\D/g, '') !== String(j.price)) return finish('fail', '价格没填进去');
+        btn(/^変更する$/).click();
+      } else {
+        const main = btn(j.op === 'stop' ? /^出品を停止する$/ : /^商品を削除する$/);
+        if (!main) return finish('fail', j.op === 'stop' ? '没有「出品を停止する」（可能已经停止了）' : '没有「商品を削除する」');
+        main.click();
+        // 确认弹窗：点里面的确认按钮
+        const ok = await waitFor(() => { const b = btn(j.op === 'stop' ? /^(停止する|出品を停止する|OK|はい)$/ : /^(削除する|商品を削除する|OK|はい)$/); return b && b !== main ? b : null; }, 8000);
+        if (ok) { await sleep(rand(500, 1000)); ok.click(); }
+      }
+      if (await left()) { finish('done', 'OK'); toast('完成', '#090'); }
+      else finish('fail', '点了按钮但页面没跳转，可能弹出了别的提示，这页留着你看一下');
+    } catch (e) { finish('fail', '出错：' + e.message); }
+  }
+
+  function addFleaPanelButton() {
+    if (document.getElementById('mbr-fopen')) return;
+    const b = document.createElement('button');
+    b.id = 'mbr-fopen';
+    b.textContent = '助手面板';
+    b.style.cssText = 'position:fixed;left:20px;bottom:80px;z-index:2147483600;padding:14px 26px;border:none;border-radius:28px;background:#f03;color:#fff;font-size:18px;font-weight:bold;cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,.3)';
+    b.onclick = openFleaPanel;
+    document.body.appendChild(b);
+  }
+
+  function openFleaPanel() {
+    if (document.getElementById('mbr-fpanel')) return;
+    const W = document.createElement('div');
+    W.id = 'mbr-fpanel';
+    const bt = (bg = '#fff', c = '#222') => `padding:6px 12px;border:1px solid #aaa;border-radius:6px;background:${bg};color:${c};cursor:pointer;font-size:14px`;
+    W.style.cssText = 'position:fixed;inset:20px;z-index:2147483646;background:#fff;border-radius:10px;box-shadow:0 4px 30px rgba(0,0,0,.4);display:flex;flex-direction:column;font-size:14px;color:#222';
+    W.innerHTML = `
+      <div style="display:flex;gap:8px;align-items:center;padding:8px 12px;border-bottom:1px solid #ddd;flex-wrap:wrap">
+        <b style="font-size:17px">Yahoo!フリマ 助手</b>
+        <button id="fp-scrape" style="${bt('#06c', '#fff')}">抓取</button>
+        <span id="fp-at" style="color:#666"></span>
+        <span id="fp-stale" style="display:none;background:#e00;color:#fff;font-weight:bold;padding:3px 10px;border-radius:4px"></span>
+        <span style="flex:1"></span><button id="fp-close" style="${bt()}">关闭</button></div>
+      <div style="display:flex;gap:10px;align-items:center;padding:8px 12px;border-bottom:1px solid #eee;flex-wrap:wrap">
+        <label><input type="checkbox" class="fp-st" value="OPEN" checked> 出品中</label>
+        <label><input type="checkbox" class="fp-st" value="CLOSE" checked> 停止中</label>
+        <label>关键词 <input id="fp-kw" style="padding:4px 6px;border:1px solid #aaa;border-radius:4px;width:180px"></label>
+        <span id="fp-count" style="color:#666"></span></div>
+      <div style="display:flex;gap:8px;align-items:center;padding:8px 12px;border-bottom:1px solid #eee;flex-wrap:wrap">
+        <label><input type="checkbox" id="fp-all"> 全选（当前筛选）</label>
+        <button id="fp-add50" style="${bt()}">+50</button>
+        <span id="fp-sel">已选 0</span>
+        <span style="margin-left:10px">改价：<select id="fp-pm" style="padding:4px"><option value="set">统一设为</option><option value="add">每件加</option><option value="sub">每件减</option></select>
+          <input id="fp-pv" type="number" min="0" style="padding:4px 6px;border:1px solid #aaa;border-radius:4px;width:90px"> 円</span>
+        <button id="fp-price" style="${bt('#f60', '#fff')}">批量改价</button>
+        <button id="fp-stop" style="${bt('#555', '#fff')}">批量停止</button>
+        <button id="fp-del" style="${bt('#c00', '#fff')}">批量删除</button>
+        <button id="fp-qstop" style="${bt()}">暂停</button>
+        <button id="fp-qgo" style="${bt()}">继续</button>
+        <span id="fp-q" style="color:#06c;font-weight:bold"></span></div>
+      <div style="flex:1;display:flex;min-height:0">
+        <div id="fp-list" style="flex:1;overflow:auto"></div>
+        <div id="fp-log" style="width:300px;overflow:auto;border-left:1px solid #eee;padding:6px;font-size:12px;color:#444;white-space:pre-wrap"></div></div>`;
+    document.body.appendChild(W);
+    const $ = id => W.querySelector('#' + id);
+    const data = () => GM_getValue(FDB, { items: [], at: 0 });
+    const getQ = () => GM_getValue(FQ, null);
+    const setQ = q => GM_setValue(FQ, q);
+    const log = m => { $('fp-log').textContent = new Date().toLocaleTimeString() + ' ' + m + '\n' + $('fp-log').textContent; };
+    const selected = new Set();
+    let view = [];
+    const esc = v => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
+
+    function render() {
+      const { items, at } = data();
+      const mins = at ? Math.floor((Date.now() - at) / 60e3) : 0;
+      if (at && mins >= 10) { $('fp-stale').style.display = ''; $('fp-stale').textContent = `⚠ 数据是 ${mins >= 120 ? Math.floor(mins / 60) + ' 小时' : mins + ' 分钟'}前的，建议重新抓取`; }
+      else $('fp-stale').style.display = 'none';
+      $('fp-at').textContent = at ? `共 ${items.length} 条（${new Date(at).toLocaleString()} 抓取）` : '还没有抓取';
+      const sts = [...W.querySelectorAll('.fp-st:checked')].map(c => c.value);
+      const kws = $('fp-kw').value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+      view = items.filter(r => sts.includes(r.status) && kws.every(k => r.title.toLowerCase().includes(k)));
+      $('fp-count').textContent = `显示 ${view.length} 条`;
+      $('fp-list').innerHTML = `<table style="width:100%;border-collapse:collapse"><thead style="position:sticky;top:0;background:#f0f0f0"><tr>
+        <th></th><th></th><th style="text-align:left">标题</th><th>状态</th><th>价格</th><th>浏览</th><th>赞</th><th>出品</th></tr></thead><tbody>${view.map(r => `
+        <tr style="border-bottom:1px solid #eee;${r.status === 'CLOSE' ? 'background:#fff8e6' : ''}">
+          <td><input type="checkbox" data-id="${r.id}" ${selected.has(r.id) ? 'checked' : ''}></td>
+          <td>${r.thumb ? `<img src="${r.thumb}" style="width:44px;height:44px;object-fit:cover">` : ''}</td>
+          <td><a href="/item/${r.id}" target="_blank" style="color:#222">${esc(r.title)}</a></td>
+          <td style="text-align:center;color:${r.status === 'OPEN' ? '#090' : '#c60'}">${r.status === 'OPEN' ? '出品中' : '停止中'}</td>
+          <td style="text-align:right">¥${(r.price || 0).toLocaleString()}</td>
+          <td style="text-align:right">${r.views ?? ''}</td><td style="text-align:right">${r.likes ?? ''}</td>
+          <td style="text-align:center;color:#888">${esc(r.age)}</td></tr>`).join('')}</tbody></table>`;
+      $('fp-sel').textContent = `已选 ${selected.size}`;
+    }
+    $('fp-list').addEventListener('change', e => { const id = e.target.dataset.id; if (!id) return; e.target.checked ? selected.add(id) : selected.delete(id); $('fp-sel').textContent = `已选 ${selected.size}`; });
+    W.querySelectorAll('.fp-st').forEach(c => c.addEventListener('change', () => { selected.clear(); render(); }));
+    $('fp-kw').addEventListener('input', render);
+    $('fp-all').onchange = e => { view.forEach(r => e.target.checked ? selected.add(r.id) : selected.delete(r.id)); render(); };
+    $('fp-add50').onclick = () => { let last = -1; view.forEach((r, i) => { if (selected.has(r.id)) last = i; }); view.slice(last + 1, last + 51).forEach(r => selected.add(r.id)); render(); };
+    $('fp-close').onclick = () => W.remove();
+
+    // ---- 抓取：后台读每一页的数据 ----
+    $('fp-scrape').onclick = async () => {
+      $('fp-scrape').disabled = true;
+      try {
+        const items = [];
+        for (let p = 1; p <= 40; p++) {
+          log(`抓取第 ${p} 页…`);
+          const h = await fetch('/my/item/selling?page=' + p, { credentials: 'include' }).then(r => r.text());
+          const m = h.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
+          const s = m && JSON.parse(m[1])?.props?.initialState?.myState?.my?.sellingItems;
+          const its = s?.items || [];
+          if (!its.length) break;
+          its.forEach(x => items.push({ id: x.id, title: x.title, price: x.price, status: x.sellStatus === 'OPEN' ? 'OPEN' : 'CLOSE',
+            views: x.viewCount, likes: x.likeCount, age: x.elapsedTimeMessage || '', thumb: x.image?.url || '' }));
+          if (its.length < 50) break;
+          await sleep(rand(600, 1200));
+        }
+        GM_setValue(FDB, { items, at: Date.now() });
+        log(`抓取完成：出品中 ${items.filter(r => r.status === 'OPEN').length}，停止中 ${items.filter(r => r.status === 'CLOSE').length}`);
+        selected.clear(); render();
+      } catch (e) { log('抓取出错：' + e.message); }
+      $('fp-scrape').disabled = false;
+    };
+
+    // ---- 队列 ----
+    function showQ() { const q = getQ(); $('fp-q').textContent = q ? `${q.label}：${q.i}/${q.ids.length}${q.running ? '（运行中）' : '（已暂停）'}` : ''; }
+    function enqueue(op, okFn, extra = {}, extraMsg = '') {
+      const map = Object.fromEntries(data().items.map(r => [r.id, r]));
+      const ids = [...selected].filter(id => map[id] && okFn(map[id]));
+      const skipped = selected.size - ids.length;
+      if (!ids.length) return alert('选中的商品里没有可以执行这个操作的。');
+      if (getQ()?.running) return alert('还有队列在运行，先暂停或等它结束。');
+      if (!confirm(`${FOP[op]}：${ids.length} 件${skipped ? `（${skipped} 件不符合条件已跳过）` : ''}。${extraMsg}${op === 'del' ? '\n删除后不能恢复。' : ''}\n确定开始？`)) return;
+      if (op === 'del' && !confirm(`再确认一次：删除 ${ids.length} 件商品，不能恢复。`)) return;
+      setQ({ op, label: FOP[op], ids, i: 0, running: true, ok: 0, ng: 0, ...extra });
+      log(`开始 ${FOP[op]}，共 ${ids.length} 件`);
+      runQueue();
+    }
+    $('fp-stop').onclick = () => enqueue('stop', r => r.status === 'OPEN');
+    $('fp-del').onclick = () => enqueue('del', () => true);
+    $('fp-price').onclick = () => {
+      const mode = $('fp-pm').value, v = parseInt($('fp-pv').value, 10);
+      if (isNaN(v) || v < 0) return alert('请先填金额');
+      const map = Object.fromEntries(data().items.map(r => [r.id, r]));
+      const prices = {}, lines = [], bad = [];
+      [...selected].forEach(id => { const r = map[id]; if (!r) return;
+        const np = mode === 'set' ? v : mode === 'add' ? r.price + v : r.price - v;
+        if (np < 300 || np > 9999999) bad.push(r.title.slice(0, 20) + ` → ¥${np}`);
+        else if (np !== r.price) { prices[id] = np; lines.push(`¥${r.price} → ¥${np}  ${r.title.slice(0, 22)}`); } });
+      if (bad.length) log(`低于 300 円，跳过 ${bad.length} 件：\n` + bad.join('\n'));
+      if (!lines.length) return alert('没有需要改价的商品（新价格和原价一样，或者低于 300 円）。');
+      log('改价预览：\n' + lines.join('\n'));
+      enqueue('price', r => r.id in prices, { prices }, `\n\n预览（前 10 件，完整列表在右边日志）：\n${lines.slice(0, 10).join('\n')}`);
+    };
+    $('fp-qstop').onclick = () => { const q = getQ(); if (q) { setQ({ ...q, running: false }); log('已暂停'); showQ(); } };
+    $('fp-qgo').onclick = () => { const q = getQ(); if (q && q.i < q.ids.length) { setQ({ ...q, running: true }); log('继续'); runQueue(); } };
+
+    let busy = false;
+    window.addEventListener('pagehide', () => { if (busy) GM_setValue(FQ, null); });
+    async function runQueue() {
+      if (busy) return; busy = true;
+      try {
+        while (true) {
+          const q = getQ(); showQ();
+          if (!q || !q.running) break;
+          if (q.i >= q.ids.length) { setQ({ ...q, running: false }); log(`${q.label} 完成：成功 ${q.ok}，失败 ${q.ng}`); showQ(); break; }
+          const id = q.ids[q.i];
+          const token = Math.random().toString(36).slice(2);
+          GM_setValue(FJOB, { id, op: q.op, price: q.prices?.[id], token, ts: Date.now(), phase: 'run' });
+          const tab = GM_openInTab(`https://paypayfleamarket.yahoo.co.jp/item/${id}/edit`, { active: true, insert: true });
+          let res = null;
+          for (let s = 0; s < 90 && !res; s++) {
+            await sleep(1000);
+            const j = GM_getValue(FJOB, null);
+            if (j && j.token === token && j.phase !== 'run') res = j;
+          }
+          const ok = res?.phase === 'done';
+          if (ok || !res) { try { tab.close(); } catch (e) {} }   // 失败的页面留着给你看
+          log(`${id}：${ok ? '成功' : res ? '失败：' + res.msg : '超时，跳过'}`);
+          if (ok) {   // 面板数据跟着更新
+            const d = data();
+            const items = q.op === 'del' ? d.items.filter(r => r.id !== id)
+              : d.items.map(r => r.id !== id ? r : q.op === 'stop' ? { ...r, status: 'CLOSE' } : { ...r, price: q.prices[id] });
+            GM_setValue(FDB, { ...d, items }); selected.delete(id); render();
+          }
+          const q2 = getQ(); if (!q2) break;
+          setQ({ ...q2, i: q2.i + 1, ok: q2.ok + (ok ? 1 : 0), ng: q2.ng + (ok ? 0 : 1) });
+          if (q2.i + 1 < q2.ids.length) await sleep(rand(GAP_MIN, GAP_MAX) * 1000);
+        }
+      } finally { busy = false; showQ(); }
+    }
+
+    render(); showQ();
+    const q = getQ();
+    if (q) { setQ(null); if (q.i < q.ids.length) log(`上次的「${q.label}」做到 ${q.i}/${q.ids.length} 就关掉了，已清除，请重新勾选`); showQ(); }
+  }
+
   // ============ 路由（煤炉是单页应用，路径变化时重新判断） ============
   let lastPath = '';
   const ran = new Set();                 // 同一个标签页里，每个任务只执行一次
@@ -1718,7 +1938,12 @@
     lastPath = path();
     if (window.top !== window.self) return;   // 抓取用的 iframe 里不运行
     const p = path();
-    if (location.hostname === 'paypayfleamarket.yahoo.co.jp') { const id = (p.match(/^\/item\/([^/?#]+)/) || [])[1]; if (id) once('fsrc:' + id, () => multiPlatformUI(id, readSrcFlea)); return; }
+    if (location.hostname === 'paypayfleamarket.yahoo.co.jp') {
+      if (/^\/my\/item\/selling/.test(p)) addFleaPanelButton(); else document.getElementById('mbr-fopen')?.remove();
+      if (/^\/item\/[^/]+\/edit/.test(p)) { once('fedit:' + p, fleaEditWorker); return; }
+      const id = (p.match(/^\/item\/([^/?#]+)\/?$/) || [])[1]; if (id) once('fsrc:' + id, () => multiPlatformUI(id, readSrcFlea));
+      return;
+    }
     if (/^(page\.)?auctions\.yahoo\.co\.jp$/.test(location.hostname) && /^\/jp\/auction\//.test(p)) { const id = p.split('/')[3]; if (id) once('asrc:' + id, () => multiPlatformUI(id, readSrcAuc)); return; }
     if (/yahoo\.co\.jp$/.test(location.hostname)) {
       // 状态提示：方便判断脚本有没有加载、任务对不对
