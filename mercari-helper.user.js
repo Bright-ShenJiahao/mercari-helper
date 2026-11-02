@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.17
+// @version      5.18
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -1264,11 +1264,13 @@
       ['brand_line_id', 'brand_line_id_1', 'brand_line_id_2'].forEach(id => { const e = document.getElementById(id); if (e) e.value = ''; });
     };
     toast('等品牌栏填完再清空…', '#c90');
-    await waitFor(brandFilled, 20000);          // 最多等 20 秒让它填进来
+    await waitFor(brandFilled, 8000);           // 最多等 8 秒让它填进来，没填就直接往下走
     let brandCleared = false;
-    for (let k = 0; k < 3; k++) {               // 清完 3 秒后再看，又被填回来就再清
-      if (brandFilled()) { clearBrand(); brandCleared = true; }
-      await sleep(3000);
+    if (brandFilled()) {
+      for (let k = 0; k < 3; k++) {             // 清完 3 秒后再看，又被填回来就再清
+        if (brandFilled()) { clearBrand(); brandCleared = true; }
+        await sleep(3000);
+      }
     }
 
     // 插件填得慢，可能把前面勾的配送清掉：这里再确认一次
