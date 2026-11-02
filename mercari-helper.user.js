@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.13
+// @version      5.14
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -1485,7 +1485,9 @@
     });
     $('mp-all').onchange = e => { view.forEach(r => e.target.checked ? selected.add(r.id) : selected.delete(r.id)); render(); };
     ['mp-kw', 'mp-days'].forEach(i => $(i).addEventListener('input', render));
-    P.querySelectorAll('.mp-st, #mp-dup').forEach(c => c.addEventListener('change', render));
+    // 切换状态时清空勾选，避免之前在别的状态下勾的商品被一起操作
+    P.querySelectorAll('.mp-st').forEach(c => c.addEventListener('change', () => { selected.clear(); render(); }));
+    $('mp-dup').addEventListener('change', render);
     $('mp-close').onclick = () => P.remove();
 
     async function scan(full) {
