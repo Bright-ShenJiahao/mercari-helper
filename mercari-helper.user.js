@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.16
+// @version      5.17
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -1013,7 +1013,10 @@
     const visBtn = name => [...document.querySelectorAll('button')].find(e => e.textContent.trim() === name && vis(e));
     const want = target.replace(/\s+/g, '');                       // スポーツ>卓球>ラバー
     // 选好后类别栏显示「スポーツ > 卓球 >ラバー」
-    const catIsSet2 = () => !!fcat && [...document.querySelectorAll('div,p')].some(e => vis(e) && e.textContent.replace(/\s+/g, '') === want);
+    // 推荐弹窗（填完标题 Yahoo 会自己弹出来）里也有「スポーツ > 卓球 > ラバー」这行字，弹窗开着时不能算已选
+    const sugRow = () => [...document.querySelectorAll('div')].find(e => vis(e) && e.textContent.replace(/\s+/g, '') === want + fcat);
+    const sugOpen = () => [...document.querySelectorAll('*')].some(e => e.childElementCount === 0 && vis(e) && e.textContent.trim() === 'カテゴリはこちらですか');
+    const catIsSet2 = () => !!fcat && !sugOpen() && [...document.querySelectorAll('div,p')].some(e => vis(e) && e.textContent.replace(/\s+/g, '') === want);
     // 类别栏入口：显示「選択してください（必須）」的 p，点它的父元素（带点击事件）
     const catEntry = () => [...document.querySelectorAll('p,span,div')].find(e =>
       e.childElementCount === 0 && e.textContent.trim() === '選択してください（必須）' && vis(e));
@@ -1021,12 +1024,13 @@
     for (let attempt = 0; attempt < 3 && fcat && !catOk; attempt++) {
       try {
         toast(`选类别「${target}」…（第 ${attempt + 1} 次）`, '#f60');
-        const f = catEntry();
-        if (!f) break;
-        f.parentElement.click();
+        // 推荐弹窗已经自己弹出来了就直接处理，否则点类别栏打开
+        if (!sugOpen()) {
+          const f = catEntry();
+          if (!f) break;
+          f.parentElement.click();
+        }
         // 标题已填时弹出「カテゴリはこちらですか」推荐列表；没有推荐时是分类树。最多等 15 秒
-        const sugRow = () => [...document.querySelectorAll('div')].find(e => vis(e) && e.textContent.replace(/\s+/g, '') === want + fcat);
-        const sugOpen = () => [...document.querySelectorAll('*')].some(e => e.childElementCount === 0 && vis(e) && e.textContent.trim() === 'カテゴリはこちらですか');
         const opened = await waitFor(() => sugRow() || sugOpen() || visLi('スポーツ') || visBtn('カテゴリ一覧'), 15000);
         if (!opened) throw new Error('类别弹窗没打开');
         if (sugRow() || sugOpen()) {
