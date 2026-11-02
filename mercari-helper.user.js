@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.8
+// @version      5.9
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -535,6 +535,9 @@
   }
 
   function multiPlatformUI(itemId, readFn = readSrc) {
+    // 每次打开商品页一个专属编号：只有点了「开始」的这一份负责派发。
+    // 煤炉是单页应用，看过的旧商品留下的监听不会撤掉，靠这个编号让它们不重复派发。
+    const TAB_ID = Math.random().toString(36).slice(2);
     const memKey = 'mbr_last_' + itemId;
 
     const waitBtn = setInterval(() => {
@@ -773,7 +776,7 @@
         const pf = numMode() ? $('mm-pf').value.trim() : '';
         const used = parseInt($('mm-st').value, 10) + ['m', 'f', 'a'].reduce((s, k) => s + (P[k].on ? P[k].n : 0), 0);
         wrap.remove();
-        setM({ tasks, i: 0, phase: 'run', itemUrl: location.href, dry, cat, src, memKey, gap: { min: gmin, max: gmax }, nextNo: { prefix: pf, next: used }, msg: '' });
+        setM({ tasks, i: 0, phase: 'run', owner: TAB_ID, itemUrl: location.href, dry, cat, src, memKey, gap: { min: gmin, max: gmax }, nextNo: { prefix: pf, next: used }, msg: '' });
         fire();
       };
       $('mm-dry').onclick = () => startRun(true);
@@ -784,7 +787,7 @@
 
     function fire() {
       const m = getM();
-      if (!m || m.itemUrl !== location.href || m.phase !== 'run') return;
+      if (!m || m.itemUrl !== location.href || m.phase !== 'run' || (m.owner && m.owner !== TAB_ID)) return;
       const t = m.tasks[m.i];
       toast(`${m.i + 1}/${m.tasks.length}：${PLAT[t.plat].name}「${t.title}」…`, PLAT[t.plat].color);
       if (t.plat === 'm') {
@@ -798,7 +801,7 @@
 
     let counting = false;
     GM_addValueChangeListener(MKEY, async (_k, _o, m) => {
-      if (!m || m.itemUrl !== location.href) return;
+      if (!m || m.itemUrl !== location.href || (m.owner && m.owner !== TAB_ID)) return;
       if (m.phase === 'error') return toast('出错停止：' + m.msg, '#c00');
       if (m.phase === 'stopped') return toast('已停止', '#555');
       if (m.phase === 'done') return toast(m.msg || '全部完成', '#090');
