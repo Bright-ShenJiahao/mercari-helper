@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.15
+// @version      5.16
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -757,6 +757,9 @@
       $('mm-cancel').onclick = () => wrap.remove();
       const startRun = dry => {
         if (!check()) return;
+        const q = GM_getValue(QUEUE, null);
+        if (P.m.on && q && q.running && q.op === 'relist' &&
+          !confirm('面板里的「批量再出品」正在运行。\n两边都要打开煤炉出品页，同时跑可能把商品填错。\n建议等它结束或先暂停。仍要开始吗？')) return;
         const tasks = [];
         ['m', 'f', 'a'].forEach(k => {
           if (!P[k].on) return;
@@ -1542,6 +1545,12 @@
       if (!ids.length) return alert('选中的商品里没有可以执行这个操作的。');
       const cur = getQ();
       if (cur && cur.running) return alert('还有队列在运行，先暂停或等它结束。');
+      if (op === 'relist') {
+        const mm = GM_getValue(MKEY, null);
+        const busy = mm && (mm.phase === 'run' || mm.phase === 'wait') && mm.ts && Date.now() - mm.ts < 60 * 60e3 &&
+          mm.tasks.slice(mm.i).some(t => t.plat === 'm');
+        if (busy && !confirm('「多平台出品」正在往煤炉出品。\n两边都要打开煤炉出品页，同时跑可能把商品填错。\n建议等它结束。仍要开始吗？')) return;
+      }
       const warn = op === 'relist' ? '' : '\n删除后不能恢复。';
       if (!confirm(`${label}：${ids.length} 件${skipped ? `（${skipped} 件不符合条件已跳过）` : ''}。${warn}\n确定开始？`)) return;
       setQ({ op, label, ids, i: 0, running: true, ok: 0, ng: 0 });
