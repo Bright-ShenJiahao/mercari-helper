@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.27
+// @version      5.28
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -1749,7 +1749,19 @@
         const ok = await waitFor(findOk, 10000);
         if (ok) { await sleep(rand(500, 1000)); ok.click(); }
       }
-      if (await left()) { finish('done', 'OK'); toast('完成', '#090'); }
+      let done = !!(await left());
+      // 没跳转：确认窗口可能还开着（切到别的窗口时页面会变慢），再点几次
+      for (let k = 0; k < 3 && !done && j.op !== 'price'; k++) {
+        const again = [...document.querySelectorAll('button,a,span,div,p,li')].filter(e => /^(OK|はい|削除する|停止する)$/.test(e.textContent.trim()) && isVis(e) && !e.children.length).pop();
+        if (again) again.click();
+        done = !!(await waitFor(() => location.pathname !== editPath, 10000));
+      }
+      // 还是没跳转：直接去查商品页，确认结果
+      if (!done && j.op === 'del') {
+        const h = await fetch('/item/' + id, { credentials: 'include' }).then(r => r.status === 404 ? '' : r.text()).catch(() => null);
+        if (h === '' || (h && /見つかりません|削除されました/.test(h))) done = true;
+      }
+      if (done) { finish('done', 'OK'); toast('完成', '#090'); }
       else finish('fail', '点了按钮但页面没跳转，可能弹出了别的提示，这页留着你看一下');
     } catch (e) { finish('fail', '出错：' + e.message); }
   }
