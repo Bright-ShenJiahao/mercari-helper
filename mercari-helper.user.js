@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.11
+// @version      5.12
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -1301,6 +1301,7 @@
   function ageDays(txt) {
     const dm = (txt || '').match(/(\d{4})[\/年.-](\d{1,2})[\/月.-](\d{1,2})/);
     if (dm) return Math.floor((Date.now() - new Date(+dm[1], dm[2] - 1, +dm[3])) / 864e5);
+    if (/半年以上前/.test(txt || '')) return 180;   // 煤炉超过半年不再显示数字
     const m = (txt || '').match(/(\d+)\s*(分|時間|日|か月|ヶ月|年)(以上)?前/);
     if (!m) return null;
     const n = +m[1];
@@ -1334,7 +1335,7 @@
       const id = a.href.split('/').filter(Boolean).pop().split('?')[0];
       const nums = txt.match(/ (\d+) (\d+) (\d+) /) || [];
       const price = (txt.match(/¥\s*([\d,]+)/) || [])[1];
-      const upd = (txt.match(/\d+\s*(分|時間|日|か月|ヶ月|年)(以上)?前|\d{4}[\/年.-]\d{1,2}[\/月.-]\d{1,2}日?/) || [''])[0];
+      const upd = (txt.match(/半年以上前|\d+\s*(分|時間|日|か月|ヶ月|年)(以上)?前|\d{4}[\/年.-]\d{1,2}[\/月.-]\d{1,2}日?/) || [''])[0];
       const img = a.querySelector('img');
       return {
         id, title: lines[0] || '',
@@ -1421,7 +1422,7 @@
       $('mp-count').textContent = `显示 ${view.length} 条`;
       if (sortKey) {
         const idx = new Map(items.map((r, i) => [r.id, i]));
-        const val = r => sortKey === 'upd' ? r.days : r[sortKey];
+        const val = r => sortKey === 'upd' ? (r.days ?? 99999) : r[sortKey];
         view = [...view].sort((a, b) => {
           const va = val(a), vb = val(b);
           if (va == null && vb == null) return idx.get(a.id) - idx.get(b.id);
