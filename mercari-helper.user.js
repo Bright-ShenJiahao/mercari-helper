@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.18
+// @version      5.19
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -995,7 +995,10 @@
 
     // 自动选类别：スポーツ > 卓球 > 子类别
     const fcat = t.cat || m.cat?.flea || '';
-    const target = 'スポーツ > 卓球 > ' + fcat;
+    // ラケット 下面还要再选一层：标题里有「ペン」就选ペンホルダー，否则シェークハンド（跟ヤフオク同一个规则）
+    const fsub = fcat === 'ラケット' ? (/ペン/.test(t.title) ? 'ペンホルダー' : 'シェークハンド') : '';
+    const fleaf = fsub || fcat;
+    const target = 'スポーツ > 卓球 > ' + fcat + (fsub ? ' > ' + fsub : '');
     // 选好后，类别栏会完整显示「スポーツ > 卓球 > ラバー」
     // 页面显示的是「スポーツ > 卓球 >ラバー」（最后一个 > 后没空格），所以比较时去掉所有空格
     const catIsSet = () => !!fcat && [...document.querySelectorAll('div,p,span,a,button')].some(e =>
@@ -1014,7 +1017,7 @@
     const want = target.replace(/\s+/g, '');                       // スポーツ>卓球>ラバー
     // 选好后类别栏显示「スポーツ > 卓球 >ラバー」
     // 推荐弹窗（填完标题 Yahoo 会自己弹出来）里也有「スポーツ > 卓球 > ラバー」这行字，弹窗开着时不能算已选
-    const sugRow = () => [...document.querySelectorAll('div')].find(e => vis(e) && e.textContent.replace(/\s+/g, '') === want + fcat);
+    const sugRow = () => [...document.querySelectorAll('div')].find(e => vis(e) && e.textContent.replace(/\s+/g, '') === want + fleaf);
     const sugOpen = () => [...document.querySelectorAll('*')].some(e => e.childElementCount === 0 && vis(e) && e.textContent.trim() === 'カテゴリはこちらですか');
     const catIsSet2 = () => !!fcat && !sugOpen() && [...document.querySelectorAll('div,p')].some(e => vis(e) && e.textContent.replace(/\s+/g, '') === want);
     // 类别栏入口：显示「選択してください（必須）」的 p，点它的父元素（带点击事件）
@@ -1046,7 +1049,7 @@
           await waitFor(() => visLi('スポーツ') || visBtn('カテゴリ一覧'), 15000);
         }
         if (!visLi('スポーツ') && visBtn('カテゴリ一覧')) { visBtn('カテゴリ一覧').click(); await waitFor(() => visLi('スポーツ'), 8000); }
-        for (const name of ['スポーツ', '卓球', fcat]) {
+        for (const name of ['スポーツ', '卓球', fcat, fsub].filter(Boolean)) {
           const li = await waitFor(() => visLi(name), 15000);
           if (!li) throw new Error('没找到类别 ' + name);
           li.click();
@@ -1081,7 +1084,7 @@
 
     let tip = m.dry
       ? `<b>试运行</b>（Yahoo!フリマ）：标题「${t.title}」价格 ${t.price}。检查完<b>不要出品</b>，点「跳过这件」继续。`
-      : `<b>Yahoo!フリマ</b> ${m.i + 1}/${m.tasks.length}：标题、价格已填${catOk ? '，类别已选「卓球 > ' + fcat + '」' + (fshipOk ? '，配送「' + FLEA_SHIPS[fship] + '」' : '') : '，<b style="color:#c00">类别没选上，请手动选（スポーツ > 卓球 > ' + (fcat || '…') + '）</b>'}。
+      : `<b>Yahoo!フリマ</b> ${m.i + 1}/${m.tasks.length}：标题、价格已填${catOk ? '，类别已选「卓球 > ' + fcat + (fsub ? ' > ' + fsub : '') + '」' + (fshipOk ? '，配送「' + FLEA_SHIPS[fship] + '」' : '') : '，<b style="color:#c00">类别没选上，请手动选（' + (fcat ? target : 'スポーツ > 卓球 > …') + '）</b>'}。
          ${btnOn() ? '请检查一下，没问题就点页面最下面的「<b>出品する</b>」。'
                    : `<b style="color:#c00">出品按钮还是灰的</b>${emp.length ? '，看起来没填：' + emp.join('、') : ''}。可以点「再试一次」，或手动改一下价格再点空白处。`}`;
     // 全自动：标题、类别、配送都对，按钮也亮，就自己点出品
