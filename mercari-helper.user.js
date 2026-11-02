@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.22
+// @version      5.23
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -762,7 +762,7 @@
       const startRun = dry => {
         if (!check()) return;
         const q = GM_getValue(QUEUE, null);
-        if (P.m.on && q && q.running && q.op === 'relist' &&
+        if (P.m.on && q && q.running && q.op === 'relist' && Date.now() - GM_getValue('mbr_qhb', 0) < 60e3 &&
           !confirm('面板里的「批量再出品」正在运行。\n两边都要打开煤炉出品页，同时跑可能把商品填错。\n建议等它结束或先暂停。仍要开始吗？')) return;
         const tasks = [];
         ['m', 'f', 'a'].forEach(k => {
@@ -817,6 +817,11 @@
       GM_openInTab(t.plat === 'f' ? 'https://paypayfleamarket-sec.yahoo.co.jp/item/add' : 'https://auctions.yahoo.co.jp/sell/jp/show/submit', { active: true, insert: true });
     }
 
+    // 关掉（或刷新）发起出品的商品页 = 停止这次多平台出品，下次重新设置
+    window.addEventListener('pagehide', () => {
+      const m = getM();
+      if (m && m.owner === TAB_ID && (m.phase === 'run' || m.phase === 'wait')) setM({ ...m, phase: 'stopped', msg: '商品页已关闭' });
+    });
     let counting = false;
     GM_addValueChangeListener(MKEY, async (_k, _o, m) => {
       if (!m || m.itemUrl !== location.href || (m.owner && m.owner !== TAB_ID)) return;
@@ -1607,8 +1612,13 @@
     }
 
     let busy = false;
+    // 心跳：队列在这个标签页里跑着时，每 15 秒写一次时间，别的标签页据此判断「真的在跑」还是「上次关掉留下的」
+    setInterval(() => { if (busy) GM_setValue('mbr_qhb', Date.now()); }, 15000);
+    // 关掉这个标签页 = 放弃这次队列，下次回来重新设置
+    window.addEventListener('pagehide', () => { if (busy) GM_setValue(QUEUE, null); });
     async function runQueue() {
       if (busy) return; busy = true;
+      GM_setValue('mbr_qhb', Date.now());
       try {
         while (true) {
           const q = getQ(); showQ();
@@ -1671,8 +1681,12 @@
     }
 
     render(); showQ();
+    // 上次关掉时没做完的队列：不继续，直接清掉（另一个标签页正在跑的除外）
     const q = getQ();
-    if (q && q.running) { log('检测到未完成的队列，继续执行'); runQueue(); }
+    if (q) {
+      if (q.running && Date.now() - GM_getValue('mbr_qhb', 0) < 60e3) log(`另一个标签页正在运行「${q.label}」（${q.i}/${q.ids.length}），这里不要再开`);
+      else { setQ(null); if (q.i < q.ids.length) log(`上次的「${q.label}」做到 ${q.i}/${q.ids.length} 就关掉了，已清除，请重新勾选`); showQ(); }
+    }
   }
 
   function addPanelButton() {
