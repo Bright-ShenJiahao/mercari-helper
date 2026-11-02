@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.26
+// @version      5.27
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -1742,7 +1742,11 @@
         if (!main) return finish('fail', j.op === 'stop' ? '没有「出品を停止する」（可能已经停止了）' : '没有「商品を削除する」');
         main.click();
         // 确认弹窗：点里面的确认按钮
-        const ok = await waitFor(() => { const b = btn(j.op === 'stop' ? /^(停止する|出品を停止する|OK|はい)$/ : /^(削除する|商品を削除する|OK|はい)$/); return b && b !== main ? b : null; }, 8000);
+        // 确认窗口的「OK」不一定是 button，所以按文字找所有元素，取最里层、最后出现的那个
+        const okRe = j.op === 'stop' ? /^(停止する|OK|はい)$/ : /^(削除する|OK|はい)$/;
+        const findOk = () => [...document.querySelectorAll('button,a,span,div,p,li')]
+          .filter(e => e !== main && okRe.test(e.textContent.trim()) && isVis(e) && ![...e.children].some(c => okRe.test(c.textContent.trim()))).pop() || null;
+        const ok = await waitFor(findOk, 10000);
         if (ok) { await sleep(rand(500, 1000)); ok.click(); }
       }
       if (await left()) { finish('done', 'OK'); toast('完成', '#090'); }
