@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.14
+// @version      5.15
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -1384,7 +1384,7 @@
         <span id="mp-count" style="color:#666"></span>
       </div>
       <div style="display:flex;gap:8px;align-items:center;padding:8px 12px;border-bottom:1px solid #eee;flex-wrap:wrap">
-        <label><input type="checkbox" id="mp-all"> 全选（当前筛选）</label>
+        <label><input type="checkbox" id="mp-all"> 全选（当前筛选）</label> <button id="mp-add50" title="从最后勾选的那件的下一件开始，往下再勾 50 件" style="padding:3px 10px;border:1px solid #888;border-radius:4px;background:#fff;cursor:pointer">+50</button>
         <span id="mp-sel">已选 0</span>
         <button id="mp-relist" style="${bt('#e33', '#fff')}">批量再出品（停旧）</button>
         <button id="mp-delstop" style="${bt('#555', '#fff')}">删除停止中</button>
@@ -1483,6 +1483,13 @@
       e.target.closest('tr').classList.toggle('on', e.target.checked);
       updSel();
     });
+    // +50：从当前列表里最后勾选的那件的下一件开始，往下勾 50 件
+    $('mp-add50').onclick = () => {
+      let last = -1;
+      view.forEach((r, i) => { if (selected.has(r.id)) last = i; });
+      view.slice(last + 1, last + 51).forEach(r => selected.add(r.id));
+      render();
+    };
     $('mp-all').onchange = e => { view.forEach(r => e.target.checked ? selected.add(r.id) : selected.delete(r.id)); render(); };
     ['mp-kw', 'mp-days'].forEach(i => $(i).addEventListener('input', render));
     // 切换状态时清空勾选，避免之前在别的状态下勾的商品被一起操作
