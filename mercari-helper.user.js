@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.24
+// @version      5.25
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -222,7 +222,7 @@
     else if (/ウェア|ウエア/.test(leaf)) flea = 'ウエア';
     else if (/シューズ/.test(leaf)) flea = 'シューズ';
     else if (/バッグ|ケース/.test(leaf) || /ケース|バッグ/.test(title)) flea = 'バッグ、ケース';
-    const ship = (flea === 'ラケット' || flea === 'バッグ、ケース') ? 'ship_delivery_yupacket_plus' : 'ship_delivery_yupacket';
+    const ship = 'ship_delivery_yupacket';   // ヤフオク 一律默认ゆうパケット，需要的话在对话框里改
     const auc = flea === 'ラバー' ? 'ラバー'
       : flea === 'ラケット' ? (/ペン/.test(title) ? 'ラケット（ペン）' : 'ラケット（シェーク）')
       : flea === 'ボール' ? 'ボール' : flea === 'バッグ、ケース' ? 'バッグ、ケース' : 'その他';
@@ -635,7 +635,7 @@
       $('mm-gmin').value = GAP.min; $('mm-gmax').value = GAP.max;
 
       const P = {
-        m: { on: true, n: 1, price, titles: [], ov: [] },
+        m: { on: true, n: 1, price, titles: [], ov: [], mship: 'ゆうゆうメルカリ便' },
         f: { on: false, n: 1, price, titles: [], ov: [], cat: cat.flea, fship: 'JAPAN_POST' },
         a: { on: false, n: 1, price, titles: [], ov: [], cat: cat.auc, ship: cat.ship },
       };
@@ -672,12 +672,14 @@
               <label>数量 <input type="number" min="1" max="20" data-n="${k}" value="${p.n}" style="${inp};width:70px"></label>
               <label>价格 <input type="number" data-p="${k}" value="${p.price}" style="${inp};width:110px"></label>
             </div>
+            ${p.on && k === 'm' ? `<div style="margin-top:6px;display:flex;gap:16px;flex-wrap:wrap">
+                <span style="background:#ffe3c2;padding:2px 6px;border-radius:4px;font-weight:bold">配送：${sel('ms', k, M_SHIPS.slice(0, 2).map(x => [x, x]), p.mship)}</span></div>` : ''}
             ${p.on && k === 'f' ? `<div style="margin-top:6px;display:flex;gap:16px;flex-wrap:wrap">
                 <span>类别：スポーツ > 卓球 > ${sel('fc', k, FLEA_CATS.map(c => [c, c]), p.cat)}</span>
-                <span>配送：${sel('fs', k, Object.entries(FLEA_SHIPS), p.fship)}</span>${autoBox('f')}</div>` : ''}
+                <span style="background:#ffe3c2;padding:2px 6px;border-radius:4px;font-weight:bold">配送：${sel('fs', k, Object.entries(FLEA_SHIPS), p.fship)}</span>${autoBox('f')}</div>` : ''}
             ${p.on && k === 'a' ? `<div style="margin-top:6px;display:flex;gap:16px;flex-wrap:wrap">
                 <span>类别：${sel('ac', k, Object.keys(AUC_CATS).map(c => [c, AUC_CATS[c]]), p.cat)}</span>
-                <span>配送：${sel('as', k, Object.entries(AUC_SHIPS), p.ship)}</span>
+                <span style="background:#ffe3c2;padding:2px 6px;border-radius:4px;font-weight:bold">配送：${sel('as', k, Object.entries(AUC_SHIPS), p.ship)}</span>
                 <span style="color:#888;font-size:13px">结束日期自动选最晚的一天</span>${autoBox('a')}</div>` : ''}
             ${rows}</div>`;
         }).join('');
@@ -689,7 +691,7 @@
       function openSide(k, i) {
         const ov = P[k].ov[i] || {};
         const shipOpts = k === 'm' ? M_SHIPS.map(x => [x, x]) : k === 'f' ? Object.entries(FLEA_SHIPS) : Object.entries(AUC_SHIPS);
-        const shipDef = k === 'm' ? (src.method || M_SHIPS[0]) : k === 'f' ? P.f.fship : P.a.ship;
+        const shipDef = k === 'm' ? P.m.mship : k === 'f' ? P.f.fship : P.a.ship;
         const tip = '';
         sideEl.style.display = 'block';
         sideEl.innerHTML = `
@@ -741,6 +743,7 @@
         if (d.on) { P[d.on].on = e.target.checked; gen(); }
         if (d.fc) P.f.cat = e.target.value;
         if (d.fs) P.f.fship = e.target.value;
+        if (d.ms) P.m.mship = e.target.value;
         if (d.au) { P[d.au].auto = e.target.checked; GM_setValue('mbr_auto2', { f: P.f.auto, a: P.a.auto }); draw(); }
         if (d.ac) P.a.cat = e.target.value;
         if (d.as) P.a.ship = e.target.value;
@@ -764,6 +767,8 @@
         const q = GM_getValue(QUEUE, null);
         if (P.m.on && q && q.running && q.op === 'relist' && Date.now() - GM_getValue('mbr_qhb', 0) < 60e3 &&
           !confirm('面板里的「批量再出品」正在运行。\n两边都要打开煤炉出品页，同时跑可能把商品填错。\n建议等它结束或先暂停。仍要开始吗？')) return;
+        const shipLines = [P.m.on && '煤炉：' + P.m.mship, P.f.on && 'Yahoo!フリマ：' + FLEA_SHIPS[P.f.fship], P.a.on && 'ヤフオク：' + AUC_SHIPS[P.a.ship]].filter(Boolean);
+        if (shipLines.length && !confirm('请核对配送方式：\n\n' + shipLines.join('\n') + '\n\n（详情里单独改过的以详情为准）\n没问题点「确定」开始。')) return;
         const tasks = [];
         ['m', 'f', 'a'].forEach(k => {
           if (!P[k].on) return;
@@ -774,7 +779,7 @@
               fsub: k === 'f' && P.f.cat === 'ラケット' && racket() ? (racket() === 'pen' ? 'ペンホルダー' : 'シェークハンド') : undefined,
               ship: k === 'a' ? (ov.ship || P[k].ship) : P[k].ship,
               fship: k === 'f' ? (ov.ship || P[k].fship) : P[k].fship,
-              mship: k === 'm' ? ov.ship : undefined,
+              mship: k === 'm' ? (ov.ship || P.m.mship) : undefined,
               desc: ov.desc, cond: ov.cond, auto: !!P[k].auto });
           });
         });
@@ -1106,7 +1111,7 @@
 
     let tip = m.dry
       ? `<b>试运行</b>（Yahoo!フリマ）：标题「${t.title}」价格 ${t.price}。检查完<b>不要出品</b>，点「跳过这件」继续。`
-      : `<b>Yahoo!フリマ</b> ${m.i + 1}/${m.tasks.length}：标题、价格已填${catOk ? '，类别已选「卓球 > ' + fcat + (fsub ? ' > ' + fsub : '') + '」' + (fshipOk ? '，配送「' + FLEA_SHIPS[fship] + '」' : '') : '，<b style="color:#c00">类别没选上，请手动选（' + (fcat ? target : 'スポーツ > 卓球 > …') + '）</b>'}。
+      : `<b>Yahoo!フリマ</b> ${m.i + 1}/${m.tasks.length}：标题、价格已填${catOk ? '，类别已选「卓球 > ' + fcat + (fsub ? ' > ' + fsub : '') + '」' + (fshipOk ? '，<b style="color:#c00">配送「' + FLEA_SHIPS[fship] + '」请核对</b>' : '') : '，<b style="color:#c00">类别没选上，请手动选（' + (fcat ? target : 'スポーツ > 卓球 > …') + '）</b>'}。
          ${btnOn() ? '请检查一下，没问题就点页面最下面的「<b>出品する</b>」。'
                    : `<b style="color:#c00">出品按钮还是灰的</b>${emp.length ? '，看起来没填：' + emp.join('、') : ''}。可以点「再试一次」，或手动改一下价格再点空白处。`}`;
     // 全自动：标题、类别、配送都对，按钮也亮，就自己点出品
@@ -1314,7 +1319,7 @@
     const catOk = catVal() && catVal() !== '0';
     banner(m.dry
       ? `<b>试运行</b>（ヤフオク）：标题「${t.title}」价格 ${t.price}。检查完<b>不要出品</b>，点「跳过这件」继续。`
-      : `<b>ヤフオク</b> ${m.i + 1}/${m.tasks.length}：标题、价格已填${catOk ? '，类别已选' : '，<b style="color:#c00">类别没选上，请点「選択する」</b>'}${shipTxt ? '，配送「' + shipTxt + '」' : '，<b style="color:#c00">配送没勾上，请手动勾</b>'}${endTxt ? '，结束 ' + endTxt : ''}${brandCleared ? '，品牌已清空' : ''}。
+      : `<b>ヤフオク</b> ${m.i + 1}/${m.tasks.length}：标题、价格已填${catOk ? '，类别已选' : '，<b style="color:#c00">类别没选上，请点「選択する」</b>'}${shipTxt ? '，<b style="color:#c00">配送「' + shipTxt + '」请核对</b>' : '，<b style="color:#c00">配送没勾上，请手动勾</b>'}${endTxt ? '，结束 ' + endTxt : ''}${brandCleared ? '，品牌已清空' : ''}。
          检查后点「<b>確認する</b>」，再在确认页点「<b>出品する</b>」。`);
     toast('等你确认', '#c90');
     // 全自动：类别、配送、标题都对，就点「確認する」
