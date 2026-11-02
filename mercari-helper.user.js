@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.12
+// @version      5.13
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -1379,7 +1379,7 @@
         <label><input type="checkbox" class="mp-st" value="public" checked> 出品中</label>
         <label><input type="checkbox" class="mp-st" value="stopped" checked> 停止中</label>
         <label><input type="checkbox" class="mp-st" value="sold"> 已售出</label>
-        <label>更新 ≥ <input id="mp-days" type="number" min="0" style="${ip};width:60px"> 天前</label>
+        <label title="煤炉显示的最后更新时间，不是出品日期">最后更新 ≥ <input id="mp-days" type="number" min="0" style="${ip};width:60px"> 天前</label>
         <label><input type="checkbox" id="mp-dup"> 只看重复</label>
         <span id="mp-count" style="color:#666"></span>
       </div>
@@ -1451,7 +1451,7 @@
           <th class="sort" data-k="price">价格${arrow('price')}</th>
           <th class="sort" data-k="views">浏览${arrow('views')}</th>
           <th class="sort" data-k="likes">赞${arrow('likes')}</th>
-          <th class="sort" data-k="upd">更新${arrow('upd')}</th>
+          <th class="sort" data-k="upd" title="煤炉显示的最后更新时间（改价、编辑、再出品都会刷新），不是出品日期">最后更新${sortKey === 'upd' ? (sortDir < 0 ? ' ▼ 旧→新' : ' ▲ 新→旧') : ' ⇅'}</th>
         </tr></thead><tbody>${rowsHtml}</tbody></table>`;
       updSel();
     }
