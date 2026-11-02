@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.23
+// @version      5.24
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -1405,6 +1405,7 @@
         <button id="mp-quick" style="${bt('#06c', '#fff')}">快速刷新（最近300条）</button>
         <button id="mp-scan" style="${bt()}">全量抓取（约15-20分钟）</button>
         <span id="mp-at" style="color:#666"></span>
+        <span id="mp-stale" style="display:none;background:#e00;color:#fff;font-weight:bold;padding:3px 10px;border-radius:4px"></span>
         <span style="flex:1"></span>
         <button id="mp-close" style="${bt()}">关闭</button>
       </div>
@@ -1442,6 +1443,10 @@
 
     function render() {
       const { items, at } = data();
+      const mins = at ? Math.floor((Date.now() - at) / 60e3) : 0;
+      const st = $('mp-stale');
+      if (at && mins >= 10) { st.style.display = ''; st.textContent = `⚠ 数据是 ${mins >= 120 ? Math.floor(mins / 60) + ' 小时' : mins + ' 分钟'}前的，建议重新抓取`; }
+      else st.style.display = 'none';
       $('mp-at').textContent = at ? `共 ${items.length} 条（${new Date(at).toLocaleString()} 抓取）` : '还没有抓取';
       const kw = norm($('mp-kw').value).toLowerCase();
       const sts = [...P.querySelectorAll('.mp-st:checked')].map(c => c.value);
