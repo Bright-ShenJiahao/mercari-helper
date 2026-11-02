@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.10
+// @version      5.11
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -776,7 +776,7 @@
         const pf = numMode() ? $('mm-pf').value.trim() : '';
         const used = parseInt($('mm-st').value, 10) + ['m', 'f', 'a'].reduce((s, k) => s + (P[k].on ? P[k].n : 0), 0);
         wrap.remove();
-        setM({ tasks, i: 0, phase: 'run', owner: TAB_ID, itemUrl: location.href, dry, cat, src, memKey, gap: { min: gmin, max: gmax }, nextNo: { prefix: pf, next: used }, msg: '' });
+        setM({ tasks, i: 0, phase: 'run', runId: Date.now().toString(36), owner: TAB_ID, itemUrl: location.href, dry, cat, src, memKey, gap: { min: gmin, max: gmax }, nextNo: { prefix: pf, next: used }, msg: '' });
         fire();
       };
       $('mm-dry').onclick = () => startRun(true);
@@ -789,6 +789,9 @@
       const m = getM();
       if (!m || m.itemUrl !== location.href || m.phase !== 'run' || (m.owner && m.owner !== TAB_ID)) return;
       const t = m.tasks[m.i];
+      const fk = (m.runId || '') + ':' + m.i;
+      if (m.fired === fk) { setM({ ...m, dupFire: (m.dupFire || 0) + 1, dupBy: TAB_ID.slice(0, 4) }); return; }   // 这件已经派发过，不再开页面
+      m.fired = fk; m.firedBy = TAB_ID.slice(0, 4);
       toast(`${m.i + 1}/${m.tasks.length}：${PLAT[t.plat].name}「${t.title}」…`, PLAT[t.plat].color);
       if (t.plat === 'm') {
         setM({ ...m, ts: Date.now() });   // 时间戳：过期的任务不会被目标页面误用
@@ -839,7 +842,18 @@
     const ttl = plat === 'm' ? 3 * 60e3 : 60 * 60e3;   // 煤炉 3 分钟内、Yahoo 60 分钟内有效
     if (Date.now() - m.ts > ttl) return null;
     const t = m.tasks[m.i];
-    return t && t.plat === plat ? { m, t } : null;
+    if (!t || t.plat !== plat) return null;
+    // 先到先得：同一件任务只让第一个打开的页面处理（同一标签页里翻页不算重复）
+    let me; try { me = sessionStorage.mbrTab || (sessionStorage.mbrTab = Math.random().toString(36).slice(2)); } catch (e) { me = 'x'; }
+    const key = m.ts + ':' + m.i;
+    if (m.claim && m.claim.key === key && m.claim.tab !== me) {
+      setM({ ...m, dupPage: (m.dupPage || 0) + 1 });
+      toast('这是重复打开的页面，任务已由另一个页面处理，本页关闭', '#c00');
+      closeSoon();
+      return null;
+    }
+    if (!m.claim || m.claim.key !== key) setM({ ...m, claim: { key, tab: me } });
+    return { m: getM(), t };
   }
   const taskDone = msg => { const m = getM(); if (m && m.phase === 'run') setM({ ...m, phase: 'wait', msg }); };
   const taskFail = msg => { const m = getM(); if (m && m.phase === 'run') setM({ ...m, phase: 'error', msg }); toast('出错：' + msg, '#c00'); };
@@ -1642,7 +1656,7 @@
       const m = getM();
       const ver = (typeof GM_info !== 'undefined' && GM_info.script.version) || '';
       const t = m && m.tasks ? m.tasks[m.i] : null;
-      toast(`助手 ${ver} 已加载｜${m ? `任务 ${m.i + 1}/${m.tasks?.length} ${t ? PLAT[t.plat].name : '?'}｜状态 ${m.phase}｜${m.ts ? Math.round((Date.now() - m.ts) / 1000) + ' 秒前派发' : '没有派发时间'}` : '没有任务'}`, '#777');
+      toast(`助手 ${ver} 已加载｜${m ? `任务 ${m.i + 1}/${m.tasks?.length} ${t ? PLAT[t.plat].name : '?'}｜状态 ${m.phase}｜${m.ts ? Math.round((Date.now() - m.ts) / 1000) + ' 秒前派发' : '没有派发时间'}｜派发者 ${m.firedBy || '?'}${m.dupFire ? `｜拦下重复派发 ${m.dupFire} 次(${m.dupBy})` : ''}${m.dupPage ? `｜关掉重复页面 ${m.dupPage} 个` : ''}` : '没有任务'}`, '#777');
     }
     if (location.hostname === 'paypayfleamarket-sec.yahoo.co.jp') { if (/^\/item\/add/.test(p)) once('flea', fleaPage); return; }
     if (location.hostname === 'auctions.yahoo.co.jp') { once('auc:' + p, aucPage); return; }
