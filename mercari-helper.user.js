@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.21
+// @version      5.22
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -1010,6 +1010,8 @@
     // ラケット 下面还要再选一层：标题里有「ペン」就选ペンホルダー，否则シェークハンド（跟ヤフオク同一个规则）
     const fsub = fcat === 'ラケット' ? (t.fsub || null) ?? (/ペン/.test(t.title) ? 'ペンホルダー' : 'シェークハンド')
       // バッグ、ケース 下面也分一层：按标题里的字判断
+      // ウエア 下面也分一层
+      : fcat === 'ウエア' ? (/パンツ|ショーツ|短パン/.test(t.title) ? 'パンツ' : /ソックス|靴下/.test(t.title) ? 'ソックス' : /ジャージ|ウォームアップ|ジャケット|パーカー/.test(t.title) ? 'ウォームアップウエア' : 'シャツ')
       : fcat === 'バッグ、ケース' ? (/シューズ/.test(t.title) ? 'シューズケース' : /ボール/.test(t.title) ? 'ボールケース' : /ラケット/.test(t.title) ? 'ラケットケース' : 'その他バッグ、ケース')
       : '';
     const fleaf = fsub || fcat;
