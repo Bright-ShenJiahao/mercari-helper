@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.9
+// @version      5.10
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -635,7 +635,7 @@
         f: { on: false, n: 1, price, titles: [], ov: [], cat: cat.flea, fship: 'JAPAN_POST' },
         a: { on: false, n: 1, price, titles: [], ov: [], cat: cat.auc, ship: cat.ship },
       };
-      const AUTO = GM_getValue('mbr_auto', { f: false, a: false });   // 记住上次选的模式
+      const AUTO = GM_getValue('mbr_auto2', { f: true, a: true });   // 记住上次选的模式
       P.f.auto = !!AUTO.f; P.a.auto = !!AUTO.a;
       const autoBox = k => `<label style="cursor:pointer;color:${P[k].auto ? '#c00' : '#555'};font-weight:${P[k].auto ? 'bold' : 'normal'}"><input type="checkbox" data-au="${k}" ${P[k].auto ? 'checked' : ''} style="width:16px;height:16px;vertical-align:middle"> 全自动（检查无误就自己点出品，有问题退回半自动）</label>`;
       const sel = (attr, k, opts, val) => `<select data-${attr}="${k}" style="${inp}">${opts.map(([v, l]) => `<option value="${v}" ${v === val ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
@@ -737,7 +737,7 @@
         if (d.on) { P[d.on].on = e.target.checked; gen(); }
         if (d.fc) P.f.cat = e.target.value;
         if (d.fs) P.f.fship = e.target.value;
-        if (d.au) { P[d.au].auto = e.target.checked; GM_setValue('mbr_auto', { f: P.f.auto, a: P.a.auto }); draw(); }
+        if (d.au) { P[d.au].auto = e.target.checked; GM_setValue('mbr_auto2', { f: P.f.auto, a: P.a.auto }); draw(); }
         if (d.ac) P.a.cat = e.target.value;
         if (d.as) P.a.ship = e.target.value;
       });
