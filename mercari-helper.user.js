@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.19
+// @version      5.20
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -593,6 +593,10 @@
         <div style="background:#fff;border-radius:12px;padding:20px 24px;width:720px;max-height:90vh;overflow:auto;font-size:15px;line-height:1.6;color:#222">
           <div style="font-weight:bold;font-size:18px;margin-bottom:10px">多平台出品</div>
           <label style="display:block">标题（不含编号）<br><textarea id="mm-base" rows="2" style="${inp};width:100%;box-sizing:border-box;resize:vertical;line-height:1.5"></textarea></label>
+          ${cat.flea === 'ラケット' ? `<div id="mm-racket" style="margin-top:6px;font-size:15px;background:#fff7e0;padding:4px 8px;border-radius:6px">底板类型：
+            <label style="cursor:pointer"><input type="radio" name="mm-rk" value="shake" ${/ペン/.test(raw) ? '' : 'checked'}> シェーク（横拍）</label>
+            <label style="cursor:pointer;margin-left:12px"><input type="radio" name="mm-rk" value="pen" ${/ペン/.test(raw) ? 'checked' : ''}> ペン（直拍）</label>
+            <span style="color:#888;font-size:13px">（Yahoo!フリマ、ヤフオク 的类别跟着变；煤炉不分）</span></div>` : ''}
           <div style="margin-top:6px;font-size:15px">编号：
             <label style="cursor:pointer"><input type="radio" name="mm-mode" value="num"> 加编号</label>
             <label style="cursor:pointer;margin-left:12px"><input type="radio" name="mm-mode" value="none"> 不加编号（直接用原标题）</label></div>
@@ -767,6 +771,7 @@
           titles.forEach((t, i) => {
             const ov = P[k].ov[i] || {};
             tasks.push({ plat: k, title: t.trim(), price: ov.price || P[k].price, cat: P[k].cat,
+              fsub: k === 'f' && P.f.cat === 'ラケット' && racket() ? (racket() === 'pen' ? 'ペンホルダー' : 'シェークハンド') : undefined,
               ship: k === 'a' ? (ov.ship || P[k].ship) : P[k].ship,
               fship: k === 'f' ? (ov.ship || P[k].fship) : P[k].fship,
               mship: k === 'm' ? ov.ship : undefined,
@@ -784,6 +789,13 @@
       };
       $('mm-dry').onclick = () => startRun(true);
       $('mm-go').onclick = () => startRun(false);
+      // 底板类型：同步到 Yahoo!フリマ 子类别和 ヤフオク 类别
+      const racket = () => document.querySelector('input[name="mm-rk"]:checked')?.value || '';
+      document.querySelectorAll('input[name="mm-rk"]').forEach(r => r.addEventListener('change', () => {
+        if (/^ラケット/.test(P.a.cat)) P.a.cat = racket() === 'pen' ? 'ラケット（ペン）' : 'ラケット（シェーク）';
+        draw();
+      }));
+      if (racket() && /^ラケット/.test(P.a.cat)) P.a.cat = racket() === 'pen' ? 'ラケット（ペン）' : 'ラケット（シェーク）';
       syncMode();
       gen();
     }
@@ -996,7 +1008,7 @@
     // 自动选类别：スポーツ > 卓球 > 子类别
     const fcat = t.cat || m.cat?.flea || '';
     // ラケット 下面还要再选一层：标题里有「ペン」就选ペンホルダー，否则シェークハンド（跟ヤフオク同一个规则）
-    const fsub = fcat === 'ラケット' ? (/ペン/.test(t.title) ? 'ペンホルダー' : 'シェークハンド') : '';
+    const fsub = fcat === 'ラケット' ? (t.fsub || null) ?? (/ペン/.test(t.title) ? 'ペンホルダー' : 'シェークハンド') : '';
     const fleaf = fsub || fcat;
     const target = 'スポーツ > 卓球 > ' + fcat + (fsub ? ' > ' + fsub : '');
     // 选好后，类别栏会完整显示「スポーツ > 卓球 > ラバー」
