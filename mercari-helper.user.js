@@ -4,17 +4,22 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.7
+// @version      5.8
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
 // @match        https://auctions.yahoo.co.jp/sell/*
+// @match        https://paypayfleamarket.yahoo.co.jp/*
+// @match        https://auctions.yahoo.co.jp/jp/auction/*
+// @match        https://page.auctions.yahoo.co.jp/jp/auction/*
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_addValueChangeListener
 // @grant        GM_openInTab
 // @grant        GM_xmlhttpRequest
 // @connect      static.mercdn.net
+// @connect      auctions.c.yimg.jp
+// @connect      yimg.jp
 // @grant        window.close
 // @run-at       document-idle
 // ==/UserScript==
@@ -355,6 +360,51 @@
     }
     return files;
   }
+  // ---- 从 Yahoo 商品页读原商品（统一成煤炉的格式）----
+  const PREF_NAMES = ['北海道','青森県','岩手県','宮城県','秋田県','山形県','福島県','茨城県','栃木県','群馬県','埼玉県','千葉県','東京都','神奈川県','新潟県','富山県','石川県','福井県','山梨県','長野県','岐阜県','静岡県','愛知県','三重県','滋賀県','京都府','大阪府','兵庫県','奈良県','和歌山県','鳥取県','島根県','岡山県','広島県','山口県','徳島県','香川県','愛媛県','高知県','福岡県','佐賀県','長崎県','熊本県','大分県','宮崎県','鹿児島県','沖縄県'];
+  const PREF_CODES = ['HOKKAIDO','AOMORI','IWATE','MIYAGI','AKITA','YAMAGATA','FUKUSHIMA','IBARAKI','TOCHIGI','GUNMA','SAITAMA','CHIBA','TOKYO','KANAGAWA','NIIGATA','TOYAMA','ISHIKAWA','FUKUI','YAMANASHI','NAGANO','GIFU','SHIZUOKA','AICHI','MIE','SHIGA','KYOTO','OSAKA','HYOGO','NARA','WAKAYAMA','TOTTORI','SHIMANE','OKAYAMA','HIROSHIMA','YAMAGUCHI','TOKUSHIMA','KAGAWA','EHIME','KOCHI','FUKUOKA','SAGA','NAGASAKI','KUMAMOTO','OITA','MIYAZAKI','KAGOSHIMA','OKINAWA'];
+  // Yahoo 的卓球子类别 → 煤炉的卓球子类别
+  const toMercariTT = leaf => /ラバー/.test(leaf) ? 'ラバー' : /ラケット|シェーク|ペン/.test(leaf) ? 'ラケット' : /ボール/.test(leaf) ? 'ボール'
+    : /ウエア|ウェア/.test(leaf) ? 'ウェア' : /バッグ|ケース/.test(leaf) ? 'バッグ・ケース' : 'その他';
+  const condToMercari = c => (c === '未使用' ? '新品、未使用' : c);
+  const daysToMercari = d => /1\s*[~〜～]\s*2/.test(d) ? '1~2日で発送' : /2\s*[~〜～]\s*3/.test(d) ? '2~3日で発送' : '4~7日で発送';
+  function nextData() { try { return JSON.parse(document.getElementById('__NEXT_DATA__').textContent); } catch (e) { return null; } }
+  function deepFind(o, test, d = 0) { if (!o || typeof o !== 'object' || d > 10) return null; if (test(o)) return o; for (const k in o) { const r = deepFind(o[k], test, d + 1); if (r) return r; } return null; }
+
+  function readSrcFlea() {
+    const it = deepFind(nextData(), o => o.title && o.description != null && Array.isArray(o.images) && o.categoryList);
+    if (!it) return null;
+    const cats = (it.categoryList || []).map(c => c.name);
+    const inTT = cats.includes('卓球');
+    const pi = PREF_CODES.indexOf(it.location);
+    return { from: 'f', id: it.id, raw: it.title, price: it.price, desc: it.description || '',
+      images: (it.images || []).map(x => x.url).filter(Boolean),
+      crumbs: inTT ? ['スポーツ', '卓球', toMercariTT(cats[cats.length - 1])] : [],
+      fleaLeaf: inTT ? cats[cats.length - 1] : '',
+      cond: condToMercari(it.condition?.text || ''), payer: '送料込み(出品者負担)',
+      method: it.deliveryMethod?.id === 'YAMATO' ? 'らくらくメルカリ便' : 'ゆうゆうメルカリ便',
+      area: pi >= 0 ? PREF_NAMES[pi] : '', days: daysToMercari(it.deliverySchedule?.text || '') };
+  }
+  function readSrcAuc() {
+    const it = deepFind(nextData(), o => o.auctionId && o.title && Array.isArray(o.img));
+    if (!it) return null;
+    const path = (it.category?.path || []).map(c => c.name);
+    const ti = path.indexOf('卓球');
+    const leaf = ti >= 0 ? path.slice(ti + 1).join(' > ') : '';
+    const html = it.descriptionHtml || (Array.isArray(it.description) ? it.description.join('\n') : it.description || '');
+    const desc = String(html).replace(/<br\s*\/?>/gi, '\n').replace(/<\/(p|div)>/gi, '\n').replace(/<[^>]+>/g, '')
+      .replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/\n{3,}/g, '\n\n').trim();
+    const m0 = (it.shipping?.methods || [])[0]?.id || '';
+    const SHIP_ID = { JP_YUPACKET: 'ship_delivery_yupacket', JP_YUPACKET_PLUS: 'ship_delivery_yupacket_plus', JP_YUPACK: 'ship_delivery_yupack', JP_YUPACKET_POST_MINI: 'ship_delivery_yupacket_post_mini' };
+    return { from: 'a', id: it.auctionId, raw: it.title, price: it.bidorbuy || it.price, desc,
+      images: (it.img || []).map(x => x.image).filter(Boolean),
+      crumbs: ti >= 0 ? ['スポーツ', '卓球', toMercariTT(leaf)] : [],
+      aucCatId: (it.category?.path || []).slice(-1)[0]?.id || '', aucShip: SHIP_ID[m0] || '',
+      cond: condToMercari(it.conditionName || ''), payer: it.chargeForShipping === 'buyer' ? '着払い(購入者負担)' : '送料込み(出品者負担)',
+      method: /^JP_/.test(m0) ? 'ゆうゆうメルカリ便' : m0 ? 'らくらくメルカリ便' : 'ゆうゆうメルカリ便',
+      area: it.seller?.location?.prefecture || it.location?.prefecture || '', days: daysToMercari(it.shipScheduleName || '') };
+  }
+
   const CONDS = ['新品、未使用', '未使用に近い', '目立った傷や汚れなし', 'やや傷や汚れあり', '傷や汚れあり', '全体的に状態が悪い'];
   const M_SHIPS = ['ゆうゆうメルカリ便', 'らくらくメルカリ便', '梱包・発送たのメル便'];
 
@@ -484,14 +534,24 @@
     return null;
   }
 
-  function multiPlatformUI(itemId) {
+  function multiPlatformUI(itemId, readFn = readSrc) {
     const memKey = 'mbr_last_' + itemId;
 
     const waitBtn = setInterval(() => {
       // 按钮放在大图正下方（原来フリマアシスト那排链接的位置）
-      const slider = document.querySelector('[data-testid="image-0"]')?.closest('.slick-slider');
-      if (!slider || document.getElementById('mbr-btn')) return;
-      const clone = slider;
+      if (document.getElementById('mbr-btn')) return;
+      let clone = document.querySelector('[data-testid="image-0"]')?.closest('.slick-slider');
+      if (!clone && readFn !== readSrc) {
+        // Yahoo 商品页：找最大的那张主图，按钮放在主图区块下面
+        if (!readFn()) return;
+        const big = [...document.querySelectorAll('img')].filter(i => { const r = i.getBoundingClientRect(); return r.width > 200 && r.top < 1400; })
+          .sort((a, b) => b.getBoundingClientRect().width * b.getBoundingClientRect().height - a.getBoundingClientRect().width * a.getBoundingClientRect().height)[0];
+        if (!big) return;
+        const h = big.getBoundingClientRect().height;
+        clone = big;
+        while (clone.parentElement && clone.parentElement.getBoundingClientRect().height < h + 160 && clone.parentElement !== document.body) clone = clone.parentElement;
+      }
+      if (!clone) return;
       clearInterval(waitBtn);
       const add = (id, text, bg, fn) => {
         const b = document.createElement('button');
@@ -511,7 +571,8 @@
 
     function openDialog() {
       if (document.getElementById('mbr-dlg')) return;
-      const src = readSrc();
+      const src = readFn();
+      if (!src) return toast('读不到这件商品的信息', '#c00');
       const { raw, crumbs, price } = src;
       const cat = mapCategory(crumbs, raw);
       const last = GM_getValue(memKey, null);
@@ -1571,6 +1632,8 @@
     lastPath = path();
     if (window.top !== window.self) return;   // 抓取用的 iframe 里不运行
     const p = path();
+    if (location.hostname === 'paypayfleamarket.yahoo.co.jp') { const id = (p.match(/^\/item\/([^/?#]+)/) || [])[1]; if (id) once('fsrc:' + id, () => multiPlatformUI(id, readSrcFlea)); return; }
+    if (/^(page\.)?auctions\.yahoo\.co\.jp$/.test(location.hostname) && /^\/jp\/auction\//.test(p)) { const id = p.split('/')[3]; if (id) once('asrc:' + id, () => multiPlatformUI(id, readSrcAuc)); return; }
     if (/yahoo\.co\.jp$/.test(location.hostname)) {
       // 状态提示：方便判断脚本有没有加载、任务对不对
       const m = getM();
