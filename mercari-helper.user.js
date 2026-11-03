@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.30
+// @version      5.31
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -531,7 +531,8 @@
     await sleep(800);
 
     // 7. 检查（状态被 AI 改掉就重选一次）
-    const condNow = () => { const s = document.body.innerText; const i = s.indexOf('商品の状態'); return s.slice(i, i + 80); };
+    // 页面上「商品の状態」可能出现不止一次（提示气泡等），每一处后面的文字都看
+    const condNow = () => { const s = document.body.innerText; let out = '', i = -1; while ((i = s.indexOf('商品の状態', i + 1)) >= 0) out += s.slice(i, i + 80) + '|'; return out; };
     if (cond && !condNow().includes(cond)) {
       const entry = hrefA('/sell/conditions');
       if (entry) {
