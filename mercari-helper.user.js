@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.28
+// @version      5.29
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -325,7 +325,11 @@
     const id = idFromPath();
     const raw = (document.querySelector('h1') || {}).textContent?.trim() || '';
     const crumbs = [];                       // [スポーツ, 卓球, ラバー]
-    for (const a of document.querySelectorAll('a[href*="category_id"]')) {
+    // 只读页面顶部的面包屑（ホーム > スポーツ > 卓球 > ラバー），不要把说明里、推荐里带类别的链接（比如「粒高」）也算进来
+    // 只读「商品の情報」里的カテゴリー（或顶部面包屑），页面下方「他の人はこちらも検索」也带类别链接，不能算
+    let catLinks = [...document.querySelectorAll('[data-testid="item-detail-category"] a[href*="category_id"]')];
+    if (!catLinks.length) catLinks = [...document.querySelectorAll('[data-testid="full-bread-crumb"] a[href*="category_id"]')];
+    for (const a of catLinks) {
       const t = a.textContent.trim();
       if (!t || t.length > 30) continue;
       if (crumbs.includes(t)) break;
