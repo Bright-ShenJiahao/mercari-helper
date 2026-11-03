@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.29
+// @version      5.30
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -418,7 +418,16 @@
     const say = s => toast(s, '#e33');
     const hrefA = h => [...document.querySelectorAll('a')].find(a => (a.getAttribute('href') || '') === h);
     const tap = el => (el.querySelector('button') || el).click();      // 类别等选项是「链接里套按钮」，点按钮才算选上
-    const backToCreate = async () => { await waitFor(() => location.pathname === '/sell/create', 10000); await sleep(1200); };
+    // 回到出品页：等 10 秒；没回来就再点一次「更新する」，还不行就按浏览器的返回
+    const backToCreate = async () => {
+      const onCreate = () => location.pathname === '/sell/create';
+      if (!await waitFor(onCreate, 10000)) {
+        const up = [...document.querySelectorAll('button')].find(b => b.textContent.trim() === '更新する' && !b.disabled);
+        if (up) { up.click(); await waitFor(onCreate, 6000); }
+        if (!onCreate()) { history.back(); await waitFor(onCreate, 8000); }
+      }
+      await sleep(1200);
+    };
     if (!await waitFor(() => document.querySelector('input[name="name"]'), 20000)) return '出品页没打开';
 
     // 1. 图片：下载原图 → 放进上传框 → 「次へ」
