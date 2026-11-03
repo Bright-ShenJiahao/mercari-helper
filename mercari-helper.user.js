@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.31
+// @version      5.32
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -418,6 +418,16 @@
     const say = s => toast(s, '#e33');
     const hrefA = h => [...document.querySelectorAll('a')].find(a => (a.getAttribute('href') || '') === h);
     const tap = el => (el.querySelector('button') || el).click();      // 类别等选项是「链接里套按钮」，点按钮才算选上
+    // 点了以后确认页面有变化（网址变了或这个选项消失了）；没变就换个方式再点，最多 3 次
+    const tapSure = async el => {
+      const before = location.href;
+      const changed = () => location.href !== before || !document.contains(el);
+      for (let k = 0; k < 3; k++) {
+        if (k === 0) tap(el); else if (k === 1) el.click(); else (el.querySelector('*') || el).dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        if (await waitFor(changed, 3000, 200)) return true;
+      }
+      return false;
+    };
     // 回到出品页：等 10 秒；没回来就再点一次「更新する」，还不行就按浏览器的返回
     const backToCreate = async () => {
       const onCreate = () => location.pathname === '/sell/create';
@@ -434,6 +444,7 @@
     say(`下载图片 0/${src.images.length}…`);
     const files = await downloadImages(src, say);
     if (!files.length) return '图片下载失败';
+    window.__mbrImgCount = files.length;
     const upl = document.querySelector('[data-testid="photo-upload"]');
     if (!upl) return '找不到上传框';
     const dt = new DataTransfer();
@@ -468,7 +479,7 @@
           const a = await waitFor(() => [...document.querySelectorAll('a')].find(x => { const s = x.textContent.trim(); return s === name || s === name + 'このカテゴリーを選択しています'; }), 10000);
           if (!a) return `类别里找不到「${name}」`;
           await sleep(rand(300, 700));
-          tap(a);
+          if (!await tapSure(a)) return `点了类别「${name}」但页面没反应`;
           await sleep(1200);
         }
         await backToCreate();
@@ -485,7 +496,7 @@
         const a = await waitFor(() => [...document.querySelectorAll('a')].find(x => x.textContent.trim().startsWith(cond)), 10000);
         if (!a) return `状态里找不到「${cond}」`;
         await sleep(rand(300, 700));
-        tap(a);
+        await tapSure(a);
         await backToCreate();
       }
     }
@@ -841,6 +852,10 @@
       const m = getM();
       if (m && m.owner === TAB_ID && (m.phase === 'run' || m.phase === 'wait')) setM({ ...m, phase: 'stopped', msg: '商品页已关闭' });
     });
+    GM_addValueChangeListener('mbr_bgwarn', (_k, _o, w) => {
+      const m = getM();
+      if (w && m && m.owner === TAB_ID && (m.phase === 'run' || m.phase === 'wait')) toast(`⚠ ${w.name}在后台，会变慢甚至卡住，请切到那个标签页`, '#c00');
+    });
     let counting = false;
     GM_addValueChangeListener(MKEY, async (_k, _o, m) => {
       if (!m || m.itemUrl !== location.href || (m.owner && m.owner !== TAB_ID)) return;
@@ -913,6 +928,28 @@
     b.querySelector('#mbr-stopall').onclick = () => { const m = getM(); if (m) setM({ ...m, phase: 'stopped' }); b.remove(); };
   }
 
+  // 页面上红色的提示文字（排除脚本自己的提示）
+  function redTexts() {
+    const out = new Set();
+    for (const e of document.querySelectorAll('p,span,div,li')) {
+      if (e.children.length || e.closest('#mbr-banner,#mbr-toast')) continue;
+      const t = e.textContent.trim();
+      if (!t || t.length > 60) continue;
+      const m = getComputedStyle(e).color.match(/\d+/g);
+      if (m && +m[0] > 180 && +m[1] < 90 && +m[2] < 110 && e.getBoundingClientRect().height > 0) out.add(t);
+    }
+    return [...out].slice(0, 4);
+  }
+  // 2. 出品页在后台超过 5 秒：通知商品页提醒你切过去
+  function watchBackground(name) {
+    let since = 0, warned = false;
+    setInterval(() => {
+      if (!document.hidden) { since = 0; warned = false; return; }
+      since = since || Date.now();
+      if (!warned && Date.now() - since > 5000) { warned = true; GM_setValue('mbr_bgwarn', { ts: Date.now(), name }); }
+    }, 1000);
+  }
+
   // ============ 煤炉出品页（多平台 / 再出品 共用）：自己填表 ============
   async function sellPage() {
     const j = getJob();
@@ -920,8 +957,15 @@
     const relist = !mt && j && j.op === 'relist' && j.phase === 'filling' && j.ts && Date.now() - j.ts < 3 * 60e3 && j.src ? j : null;
     if (!mt && !relist) return;
 
+    if (mt) watchBackground('煤炉出品页');
     const fail = msg => {
-      if (mt) taskFail(msg + '。这页留着，你可以手动补完出品');
+      if (mt) {
+        banner(`<b style="color:#c00">煤炉出错：</b>${msg}。<br>可以手动改好后自己点「出品する」（成功后会自动继续下一件），或者点「跳过这件」继续下一件。`);
+        const bb = document.getElementById('mbr-banner'); if (bb) bb.style.background = '#ffd6d6';
+        // 你手动出品成功（离开出品页）也算这件完成
+        (async () => { if (await waitFor(() => !/\/sell\/create/.test(path()) && !/\/sell\//.test(path()), 30 * 60e3, 1000)) { taskDone('手动出品成功'); closeSoon(); } })();
+        return;
+      }
       else if (getJob()?.phase === 'filling') { finishJob(false, msg); toast('出错：' + msg, '#c00'); }
     };
     const priceEl = () => document.querySelector('[data-testid="price-text-input"]');
@@ -947,6 +991,13 @@
     await sleep(rand(1500, 3000));
 
     // 出品按钮灰着就再“碰”一次价格，最多 3 轮
+    // 出品前核对图片：等上传完，数量要对
+    const upMsg = () => /アップロードがすべて完了するまでお待ちください/.test(document.body.innerText);
+    await waitFor(() => !upMsg(), 30000);
+    const nThumb = document.querySelectorAll('[data-testid="photo-thumbnail"]').length;
+    const want = window.__mbrImgCount || 0;
+    if (upMsg()) return fail(`图片还在上传（页面上有 ${nThumb} 张${want ? '，应该是 ' + want + ' 张' : ''}）`);
+    if (want && nThumb !== want) return fail(`图片数量不对：页面上 ${nThumb} 张，应该是 ${want} 张`);
     let btn = null;
     for (let round = 0; round < 3 && !btn; round++) {
       btn = await waitFor(() => {
@@ -978,13 +1029,15 @@
         return;
       }
     }
-    fail(`「${title}」点了出品但60秒没成功，可能有必填项报错，请看这页`);
+    const reds = redTexts();
+    fail(`「${title}」点了出品但60秒没成功` + (reds.length ? '，页面提示：' + reds.join('／') : '，可能有必填项报错，请看这页'));
   }
 
   // ============ Yahoo!フリマ 出品页（半自动） ============
   async function fleaPage() {
     const ct = curTask('f');
     if (!ct) return;
+    watchBackground('Yahoo!フリマ 出品页');
     const { m, t } = ct;
     const titleEl = () => document.querySelector('input[placeholder^="商品名"]');
     const priceEl = () => document.querySelector('input[type="tel"]');
@@ -1163,6 +1216,7 @@
   async function aucPage() {
     const ct = curTask('a');
     if (!ct) return;
+    watchBackground('ヤフオク 出品页');
     const { m, t } = ct;
     const p = location.pathname;
     const want = AUC_CATS[t.cat] || AUC_CATS[m.cat?.auc] || '';   // 例：'卓球 > ラバー'
