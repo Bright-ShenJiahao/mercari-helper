@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.34
+// @version      5.35
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -1478,6 +1478,7 @@
         <button id="mp-quick" style="${bt('#06c', '#fff')}">快速刷新（最近300条）</button>
         <button id="mp-scan" style="${bt()}">全量抓取（约15-20分钟）</button>
         <button id="mp-ana" style="${bt('#7a3', '#fff')}">销售分析</button>
+        <button id="mp-csv" style="${bt()}">导出全部商品（CSV）</button>
         <span id="mp-at" style="color:#666"></span>
         <span id="mp-stale" style="display:none;background:#e00;color:#fff;font-weight:bold;padding:3px 10px;border-radius:4px"></span>
         <span style="flex:1"></span>
@@ -1759,6 +1760,17 @@
       } finally { busy = false; showQ(); render(); }
     }
 
+    $('mp-csv').onclick = () => {
+      const d = data(); if (!d.items.length) return alert('先抓取一次');
+      const q = v => '"' + String(v ?? '').replace(/"/g, '""') + '"';
+      const ST = { public: '出品中', stopped: '停止中', sold: '已售出' };
+      const lines = [['标题', '状态', '价格', '浏览', '赞', '最后更新', '商品ID'].map(q).join(',')]
+        .concat(d.items.map(r => [r.title, ST[r.status] || r.status, r.price, r.views, r.likes, r.upd, r.id].map(q).join(',')));
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob(['\ufeff' + lines.join('\n')], { type: 'text/csv' }));
+      a.download = `メルカリ全商品_${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+    };
     $('mp-ana').onclick = () => { const d = data(); if (!d.items.length) return alert('先抓取一次'); if (!d.items.some(r => r.status === 'sold')) alert('提示：数据里没有已售出的商品，畅销榜和断货提醒会是空的。用「全量抓取」才会包含已售出。'); openAnalysis(d.items); };
     render(); showQ();
     // 上次关掉时没做完的队列：不继续，直接清掉（另一个标签页正在跑的除外）
