@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.36
+// @version      5.37
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -1919,13 +1919,13 @@
     await sleep(50);
     const groups = groupItems(items, hashes);
 
-    const opt = { days: 30, likes: 3 };
+    const opt = { days: 30, likes: 3, months: 5 };
     const TABS = {
       best: { name: '畅销榜', rows: () => groups.filter(g => g.sold).sort((a, b) => b.sold - a.sold || b.revenue - a.revenue),
         cols: [['已售', g => g.sold], ['销售额', g => '¥' + g.revenue.toLocaleString()], ['均价', g => '¥' + Math.round(g.revenue / g.sold).toLocaleString()], ['出品中', g => g.pub], ['停止中', g => g.stop]] },
-      out: { name: '断货提醒', rows: () => groups.filter(g => g.sold && !g.pub).sort((a, b) => b.sold - a.sold),
+      out: { name: '断货提醒', rows: () => groups.filter(g => g.sold && !g.pub && g.lastSold != null && g.lastSold <= opt.months * 30).sort((a, b) => b.sold - a.sold), opt: 'months',
         cols: [['已售', g => g.sold], ['最近卖出', g => g.lastSold != null && g.lastSold < 99999 ? g.lastSold + ' 天前' : '半年以上'], ['停止中（可再出品）', g => g.stop]],
-        tip: '卖出过、但现在一件都没在卖的商品：补货，或者把停止中的再出品' },
+        tip: '最近 N 个月内卖出过、但现在一件都没在卖的商品：补货，或者把停止中的再出品' },
       slow: { name: '滞销', rows: () => groups.filter(g => g.pub && !g.sold && g.oldestPub >= opt.days).sort((a, b) => b.oldestPub - a.oldestPub),
         cols: [['出品中', g => g.pub], ['挂了最久', g => g.oldestPub + ' 天'], ['平均浏览', g => Math.round(g.pubViews / g.pub)]],
         tip: '在卖、一件没卖出、挂了很久的商品：考虑降价或再出品', opt: 'days' },
@@ -1939,7 +1939,7 @@
     function draw() {
       $('an-tabs').innerHTML = Object.entries(TABS).map(([k, t]) => `<button data-tab="${k}" style="${bt(k === tab)}">${t.name}（${t.rows().length}）</button>`).join('');
       const T = TABS[tab];
-      $('an-opt').innerHTML = T.opt === 'days' ? `挂了 ≥ <input id="an-v" type="number" value="${opt.days}" style="width:60px"> 天`
+      $('an-opt').innerHTML = T.opt === 'months' ? `最近 <input id="an-v" type="number" value="${opt.months}" style="width:50px"> 个月内卖过` : T.opt === 'days' ? `挂了 ≥ <input id="an-v" type="number" value="${opt.days}" style="width:60px"> 天`
         : T.opt === 'likes' ? `赞 ≥ <input id="an-v" type="number" value="${opt.likes}" style="width:60px">` : '';
       const v = $('an-v'); if (v) v.onchange = () => { opt[T.opt] = Math.max(0, +v.value || 0); draw(); };
       const rows = T.rows();
@@ -2043,12 +2043,15 @@
       <div style="display:flex;gap:8px;align-items:center;padding:8px 12px;border-bottom:1px solid #ddd;flex-wrap:wrap">
         <b style="font-size:17px">Yahoo!フリマ 助手</b>
         <button id="fp-scrape" style="${bt('#06c', '#fff')}">抓取</button>
+        <button id="fp-ana" style="${bt('#7a3', '#fff')}">销售分析</button>
+        <button id="fp-csv" style="${bt()}">导出全部商品（CSV）</button>
         <span id="fp-at" style="color:#666"></span>
         <span id="fp-stale" style="display:none;background:#e00;color:#fff;font-weight:bold;padding:3px 10px;border-radius:4px"></span>
         <span style="flex:1"></span><button id="fp-close" style="${bt()}">关闭</button></div>
       <div style="display:flex;gap:10px;align-items:center;padding:8px 12px;border-bottom:1px solid #eee;flex-wrap:wrap">
         <label><input type="checkbox" class="fp-st" value="OPEN" checked> 出品中</label>
         <label><input type="checkbox" class="fp-st" value="CLOSE" checked> 停止中</label>
+        <label><input type="checkbox" class="fp-st" value="SOLD"> 已售出</label>
         <label>关键词 <input id="fp-kw" style="padding:4px 6px;border:1px solid #aaa;border-radius:4px;width:180px"></label>
         <span id="fp-count" style="color:#666"></span></div>
       <div style="display:flex;gap:8px;align-items:center;padding:8px 12px;border-bottom:1px solid #eee;flex-wrap:wrap">
@@ -2092,7 +2095,7 @@
           <td><input type="checkbox" data-id="${r.id}" ${selected.has(r.id) ? 'checked' : ''}></td>
           <td>${r.thumb ? `<img src="${r.thumb}" style="width:44px;height:44px;object-fit:cover">` : ''}</td>
           <td><a href="/item/${r.id}" target="_blank" style="color:#222">${esc(r.title)}</a></td>
-          <td style="text-align:center;color:${r.status === 'OPEN' ? '#090' : '#c60'}">${r.status === 'OPEN' ? '出品中' : '停止中'}</td>
+          <td style="text-align:center;color:${r.status === 'OPEN' ? '#090' : r.status === 'SOLD' ? '#888' : '#c60'}">${{ OPEN: '出品中', CLOSE: '停止中', SOLD: '已售出' }[r.status]}</td>
           <td style="text-align:right">¥${(r.price || 0).toLocaleString()}</td>
           <td style="text-align:right">${r.views ?? ''}</td><td style="text-align:right">${r.likes ?? ''}</td>
           <td style="text-align:center;color:#888">${esc(r.age)}</td></tr>`).join('')}</tbody></table>`;
@@ -2104,6 +2107,24 @@
     $('fp-all').onchange = e => { view.forEach(r => e.target.checked ? selected.add(r.id) : selected.delete(r.id)); render(); };
     $('fp-add50').onclick = () => { let last = -1; view.forEach((r, i) => { if (selected.has(r.id)) last = i; }); view.slice(last + 1, last + 51).forEach(r => selected.add(r.id)); render(); };
     $('fp-close').onclick = () => W.remove();
+    // 统一成分析用的格式（天数用真实时间算：已售出用成交时间，在卖的用出品时间）
+    const toAna = () => data().items.map(r => {
+      const t = r.status === 'SOLD' ? r.upd : r.open;
+      const days = t ? Math.floor((Date.now() - Date.parse(t)) / 864e5) : null;
+      return { id: r.id, title: r.title, price: r.price, views: r.views, likes: r.likes, thumb: r.thumb, upd: r.age, days,
+        status: { OPEN: 'public', CLOSE: 'stopped', SOLD: 'sold' }[r.status] };
+    });
+    $('fp-ana').onclick = () => { const it = toAna(); if (!it.length) return alert('先抓取一次'); if (!it.some(r => r.status === 'sold')) alert('数据里没有已售出，先重新「抓取」一次（新版会连已售出一起抓）'); openAnalysis(it); };
+    $('fp-csv').onclick = () => {
+      const it = data().items; if (!it.length) return alert('先抓取一次');
+      const q = v => '"' + String(v ?? '').replace(/"/g, '""') + '"';
+      const lines = [['标题', '状态', '价格', '浏览', '赞', '出品时间', '最后更新', '商品ID'].map(q).join(',')]
+        .concat(it.map(r => [r.title, { OPEN: '出品中', CLOSE: '停止中', SOLD: '已售出' }[r.status], r.price, r.views, r.likes, (r.open || '').slice(0, 10), (r.upd || '').slice(0, 10), r.id].map(q).join(',')));
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob(['\ufeff' + lines.join('\n')], { type: 'text/csv' }));
+      a.download = `フリマ全商品_${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+    };
 
     // ---- 抓取：后台读每一页的数据 ----
     $('fp-scrape').onclick = async () => {
@@ -2118,12 +2139,24 @@
           const its = s?.items || [];
           if (!its.length) break;
           its.forEach(x => items.push({ id: x.id, title: x.title, price: x.price, status: x.sellStatus === 'OPEN' ? 'OPEN' : 'CLOSE',
-            views: x.viewCount, likes: x.likeCount, age: x.elapsedTimeMessage || '', thumb: x.image?.url || '' }));
+            views: x.viewCount, likes: x.likeCount, age: x.elapsedTimeMessage || '', thumb: x.image?.url || '', open: x.openTime || '', upd: x.updateTime || '' }));
+          if (its.length < 50) break;
+          await sleep(rand(600, 1200));
+        }
+        // 已售出（取引中・取引完了）
+        for (let p = 1; p <= 80; p++) {
+          log(`抓取已售出第 ${p} 页…`);
+          const h = await fetch('/my/item/sold?page=' + p, { credentials: 'include' }).then(r => r.text());
+          const m = h.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
+          const its = (m && JSON.parse(m[1])?.props?.initialState?.myState?.my?.soldItems?.items) || [];
+          if (!its.length) break;
+          its.forEach(x => items.push({ id: x.id, title: x.title, price: x.price, status: 'SOLD', views: x.viewCount, likes: x.likeCount,
+            age: x.elapsedTimeMessage || '', thumb: x.image?.url || '', open: x.openTime || '', upd: x.updateTime || '' }));
           if (its.length < 50) break;
           await sleep(rand(600, 1200));
         }
         GM_setValue(FDB, { items, at: Date.now() });
-        log(`抓取完成：出品中 ${items.filter(r => r.status === 'OPEN').length}，停止中 ${items.filter(r => r.status === 'CLOSE').length}`);
+        log(`抓取完成：出品中 ${items.filter(r => r.status === 'OPEN').length}，停止中 ${items.filter(r => r.status === 'CLOSE').length}，已售出 ${items.filter(r => r.status === 'SOLD').length}`);
         selected.clear(); render();
       } catch (e) { log('抓取出错：' + e.message); }
       $('fp-scrape').disabled = false;
@@ -2144,13 +2177,13 @@
       runQueue();
     }
     $('fp-stop').onclick = () => enqueue('stop', r => r.status === 'OPEN');
-    $('fp-del').onclick = () => enqueue('del', () => true);
+    $('fp-del').onclick = () => enqueue('del', r => r.status !== 'SOLD');
     $('fp-price').onclick = () => {
       const mode = $('fp-pm').value, v = parseInt($('fp-pv').value, 10);
       if (isNaN(v) || v < 0) return alert('请先填金额');
       const map = Object.fromEntries(data().items.map(r => [r.id, r]));
       const prices = {}, lines = [], bad = [];
-      [...selected].forEach(id => { const r = map[id]; if (!r) return;
+      [...selected].forEach(id => { const r = map[id]; if (!r || r.status === 'SOLD') return;
         const np = mode === 'set' ? v : mode === 'add' ? r.price + v : r.price - v;
         if (np < 300 || np > 9999999) bad.push(r.title.slice(0, 20) + ` → ¥${np}`);
         else if (np !== r.price) { prices[id] = np; lines.push(`¥${r.price} → ¥${np}  ${r.title.slice(0, 22)}`); } });
