@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.32
+// @version      5.33
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -1477,6 +1477,7 @@
         <b style="font-size:15px">メルカリ助手</b>
         <button id="mp-quick" style="${bt('#06c', '#fff')}">快速刷新（最近300条）</button>
         <button id="mp-scan" style="${bt()}">全量抓取（约15-20分钟）</button>
+        <button id="mp-ana" style="${bt('#7a3', '#fff')}">销售分析</button>
         <span id="mp-at" style="color:#666"></span>
         <span id="mp-stale" style="display:none;background:#e00;color:#fff;font-weight:bold;padding:3px 10px;border-radius:4px"></span>
         <span style="flex:1"></span>
@@ -1758,6 +1759,7 @@
       } finally { busy = false; showQ(); render(); }
     }
 
+    $('mp-ana').onclick = () => { const d = data(); if (!d.items.length) return alert('先抓取一次'); if (!d.items.some(r => r.status === 'sold')) alert('提示：数据里没有已售出的商品，畅销榜和断货提醒会是空的。用「全量抓取」才会包含已售出。'); openAnalysis(d.items); };
     render(); showQ();
     // 上次关掉时没做完的队列：不继续，直接清掉（另一个标签页正在跑的除外）
     const q = getQ();
@@ -1775,6 +1777,150 @@
     b.style.cssText = 'position:fixed;left:20px;bottom:80px;z-index:2147483600;padding:14px 26px;border:none;border-radius:28px;background:#e33;color:#fff;font-size:18px;font-weight:bold;cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,.3)';
     b.onclick = openPanel;
     document.body.appendChild(b);
+  }
+
+  // ============ 销售分析：自动识别同一种商品（主图指纹 + 标题），4 个标签 ============
+  const HKEY = 'mbr_imghash';   // { 商品id: 'hex 指纹' }
+  const COLORS = ['赤', '黒', '青', '緑', '紫', '黄', '白', 'ピンク', 'オレンジ', '水色', 'red', 'black', 'blue', 'green', 'purple', 'pink', 'yellow'];
+  const normTitle = t => {
+    let s = String(t || '').normalize('NFKC').toLowerCase().replace(/[【】\[\]（）()「」『』!！?？☆★♪・,，、。]/g, ' ').replace(/\s+/g, ' ').trim();
+    for (let k = 0; k < 2; k++) s = s.replace(/\s*[a-z]{1,2}\s?\d{1,3}$/i, '').trim();   // 去掉末尾编号 A1 / w5 / ZZ3 / r 2（3 个字母的如 neo 3 不去）
+    return s;
+  };
+  const colorsOf = s => COLORS.filter(c => s.includes(c)).sort().join(',');
+  // 主图指纹：缩成 9×8 灰度，比较相邻像素明暗（dHash）
+  async function imgHash(url) {
+    const b = await fetchImg(url);
+    if (!b) return null;
+    try {
+      const bmp = await createImageBitmap(b);
+      const c = document.createElement('canvas'); c.width = 9; c.height = 8;
+      const g = c.getContext('2d'); g.drawImage(bmp, 0, 0, 9, 8);
+      const d = g.getImageData(0, 0, 9, 8).data;
+      let bits = '';
+      for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) {
+        const p = (y * 9 + x) * 4, q = p + 4;
+        bits += (d[p] * 3 + d[p + 1] * 6 + d[p + 2]) > (d[q] * 3 + d[q + 1] * 6 + d[q + 2]) ? '1' : '0';
+      }
+      return parseInt(bits.slice(0, 32), 2).toString(16).padStart(8, '0') + parseInt(bits.slice(32), 2).toString(16).padStart(8, '0');
+    } catch (e) { return null; }
+  }
+  const popc = n => { n -= (n >>> 1) & 0x55555555; n = (n & 0x33333333) + ((n >>> 2) & 0x33333333); return (((n + (n >>> 4)) & 0xF0F0F0F) * 0x1010101) >>> 24; };
+  const hamming = (a, b) => popc((a[0] ^ b[0]) >>> 0) + popc((a[1] ^ b[1]) >>> 0);
+
+  function groupItems(items, hashes) {
+    const n = items.length, par = items.map((_, i) => i);
+    const find = i => { while (par[i] !== i) { par[i] = par[par[i]]; i = par[i]; } return i; };
+    const uni = (a, b) => { a = find(a); b = find(b); if (a !== b) par[b] = a; };
+    const info = items.map(r => { const nt = normTitle(r.title); return { nt, key: nt.replace(/\s/g, ''), col: colorsOf(nt), tok: new Set(nt.split(' ').filter(w => w.length > 1)), h: hashes[r.id] ? [parseInt(hashes[r.id].slice(0, 8), 16), parseInt(hashes[r.id].slice(8), 16)] : null }; });
+    // 1. 标题去掉编号后完全一样
+    const byKey = {};
+    info.forEach((x, i) => { if (x.key in byKey) uni(byKey[x.key], i); else byKey[x.key] = i; });
+    // 2. 主图几乎一样（颜色写法也一样）；3. 标题很像 + 主图比较像
+    for (let i = 0; i < n; i++) {
+      const a = info[i]; if (!a.h) continue;
+      for (let j = i + 1; j < n; j++) {
+        const b = info[j]; if (!b.h || a.col !== b.col || find(i) === find(j)) continue;
+        const d = hamming(a.h, b.h);
+        if (d <= 5) { uni(i, j); continue; }
+        if (d <= 12) {
+          let inter = 0; a.tok.forEach(w => { if (b.tok.has(w)) inter++; });
+          const jac = inter / (a.tok.size + b.tok.size - inter || 1);
+          if (jac >= 0.6) uni(i, j);
+        }
+      }
+    }
+    const groups = {};
+    items.forEach((r, i) => { const g = find(i); (groups[g] = groups[g] || []).push(r); });
+    return Object.values(groups).map(list => {
+      const cnt = {}; list.forEach(r => { const k = normTitle(r.title); cnt[k] = (cnt[k] || 0) + 1; });
+      const name = Object.entries(cnt).sort((a, b) => b[1] - a[1])[0][0];
+      const by = s => list.filter(r => r.status === s);
+      const sold = by('sold'), pub = by('public'), stop = by('stopped');
+      return { name, list, thumb: list.find(r => r.thumb)?.thumb || '', sold: sold.length, pub: pub.length, stop: stop.length,
+        revenue: sold.reduce((s, r) => s + (r.price || 0), 0),
+        lastSold: sold.length ? Math.min(...sold.map(r => r.days ?? 99999)) : null,
+        oldestPub: pub.length ? Math.max(...pub.map(r => r.days ?? 0)) : null,
+        pubViews: pub.reduce((s, r) => s + (r.views || 0), 0), pubLikes: pub.reduce((s, r) => s + (r.likes || 0), 0) };
+    });
+  }
+
+  async function openAnalysis(items) {
+    if (document.getElementById('mbr-ana')) return;
+    const W = document.createElement('div');
+    W.id = 'mbr-ana';
+    W.style.cssText = 'position:fixed;inset:24px;z-index:2147483647;background:#fff;border-radius:10px;box-shadow:0 4px 30px rgba(0,0,0,.45);display:flex;flex-direction:column;font-size:14px;color:#222';
+    const bt = (on) => `padding:6px 14px;border:1px solid #aaa;border-radius:6px;cursor:pointer;background:${on ? '#06c' : '#fff'};color:${on ? '#fff' : '#222'}`;
+    W.innerHTML = `<div style="display:flex;gap:8px;align-items:center;padding:10px 12px;border-bottom:1px solid #ddd;flex-wrap:wrap">
+        <b style="font-size:17px">销售分析</b><span id="an-tabs" style="display:flex;gap:6px"></span>
+        <span id="an-opt"></span><span style="flex:1"></span>
+        <button id="an-csv" style="${bt()}">导出 Excel（CSV）</button><button id="an-close" style="${bt()}">关闭</button></div>
+      <div id="an-body" style="flex:1;overflow:auto;padding:8px 12px">准备中…</div>`;
+    document.body.appendChild(W);
+    const $ = id => W.querySelector('#' + id);
+    $('an-close').onclick = () => W.remove();
+
+    // 主图指纹：算过的存起来，只算新的
+    const hashes = GM_getValue(HKEY, {});
+    const need = items.filter(r => r.thumb && !hashes[r.id]);
+    for (let i = 0; i < need.length; i += 8) {
+      if (!document.getElementById('mbr-ana')) return;
+      $('an-body').textContent = `第一次需要识别商品主图：${i}/${need.length}（算过的会记住，下次很快）…`;
+      const part = need.slice(i, i + 8);
+      const hs = await Promise.all(part.map(r => imgHash(r.thumb)));
+      part.forEach((r, k) => { if (hs[k]) hashes[r.id] = hs[k]; });
+      if (i % 200 === 0) GM_setValue(HKEY, hashes);
+    }
+    GM_setValue(HKEY, hashes);
+    $('an-body').textContent = '分组中…';
+    await sleep(50);
+    const groups = groupItems(items, hashes);
+
+    const opt = { days: 30, likes: 3 };
+    const TABS = {
+      best: { name: '畅销榜', rows: () => groups.filter(g => g.sold).sort((a, b) => b.sold - a.sold || b.revenue - a.revenue),
+        cols: [['已售', g => g.sold], ['销售额', g => '¥' + g.revenue.toLocaleString()], ['均价', g => '¥' + Math.round(g.revenue / g.sold).toLocaleString()], ['出品中', g => g.pub], ['停止中', g => g.stop]] },
+      out: { name: '断货提醒', rows: () => groups.filter(g => g.sold && !g.pub).sort((a, b) => b.sold - a.sold),
+        cols: [['已售', g => g.sold], ['最近卖出', g => g.lastSold != null && g.lastSold < 99999 ? g.lastSold + ' 天前' : '半年以上'], ['停止中（可再出品）', g => g.stop]],
+        tip: '卖出过、但现在一件都没在卖的商品：补货，或者把停止中的再出品' },
+      slow: { name: '滞销', rows: () => groups.filter(g => g.pub && !g.sold && g.oldestPub >= opt.days).sort((a, b) => b.oldestPub - a.oldestPub),
+        cols: [['出品中', g => g.pub], ['挂了最久', g => g.oldestPub + ' 天'], ['平均浏览', g => Math.round(g.pubViews / g.pub)]],
+        tip: '在卖、一件没卖出、挂了很久的商品：考虑降价或再出品', opt: 'days' },
+      watch: { name: '有人看没人买', rows: () => groups.filter(g => g.pub && g.pubLikes >= opt.likes).sort((a, b) => b.pubLikes - a.pubLikes),
+        cols: [['出品中的赞', g => g.pubLikes], ['出品中的浏览', g => g.pubViews], ['出品中', g => g.pub], ['已售', g => g.sold]],
+        tip: '在卖的商品被点了不少赞：降价时煤炉会通知点过赞的人', opt: 'likes' },
+    };
+    let tab = 'best';
+    const esc = v => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
+    const ST = { public: ['出品中', '#090'], stopped: ['停止中', '#c60'], sold: ['已售出', '#888'] };
+    function draw() {
+      $('an-tabs').innerHTML = Object.entries(TABS).map(([k, t]) => `<button data-tab="${k}" style="${bt(k === tab)}">${t.name}（${t.rows().length}）</button>`).join('');
+      const T = TABS[tab];
+      $('an-opt').innerHTML = T.opt === 'days' ? `挂了 ≥ <input id="an-v" type="number" value="${opt.days}" style="width:60px"> 天`
+        : T.opt === 'likes' ? `赞 ≥ <input id="an-v" type="number" value="${opt.likes}" style="width:60px">` : '';
+      const v = $('an-v'); if (v) v.onchange = () => { opt[T.opt] = Math.max(0, +v.value || 0); draw(); };
+      const rows = T.rows();
+      $('an-body').innerHTML = `<div style="color:#666;margin-bottom:6px">${T.tip || '按卖出件数排序'}。共 ${groups.length} 种商品（${items.length} 件）。点一行展开看每一件。</div>
+        <table style="width:100%;border-collapse:collapse"><thead style="position:sticky;top:0;background:#f0f0f0"><tr><th></th><th style="text-align:left">商品（自动识别）</th>${T.cols.map(c => `<th>${c[0]}</th>`).join('')}</tr></thead>
+        <tbody>${rows.map((g, i) => `<tr data-g="${i}" style="border-bottom:1px solid #eee;cursor:pointer">
+          <td>${g.thumb ? `<img src="${g.thumb}" style="width:44px;height:44px;object-fit:cover">` : ''}</td>
+          <td>${esc(g.name)} <span style="color:#999">（${g.list.length} 件）</span></td>${T.cols.map(c => `<td style="text-align:center">${c[1](g)}</td>`).join('')}</tr>
+          <tr data-d="${i}" style="display:none"><td></td><td colspan="${T.cols.length + 1}" style="background:#fafafa;padding:4px 8px">${g.list.map(r =>
+            `<div><a href="/item/${r.id}" target="_blank" style="color:#222">${esc(r.title)}</a> <span style="color:${ST[r.status][1]}">${ST[r.status][0]}</span> ¥${(r.price || 0).toLocaleString()} 浏览${r.views ?? '-'} 赞${r.likes ?? '-'} <span style="color:#999">${esc(r.upd)}</span></div>`).join('')}</td></tr>`).join('')}</tbody></table>`;
+      W.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { tab = b.dataset.tab; draw(); });
+      W.querySelectorAll('tr[data-g]').forEach(tr => tr.onclick = () => { const d = W.querySelector(`tr[data-d="${tr.dataset.g}"]`); d.style.display = d.style.display === 'none' ? '' : 'none'; });
+    }
+    $('an-csv').onclick = () => {
+      const T = TABS[tab];
+      const q = v => '"' + String(v ?? '').replace(/"/g, '""') + '"';
+      const lines = [['商品', '件数', ...T.cols.map(c => c[0])].map(q).join(',')]
+        .concat(T.rows().map(g => [g.name, g.list.length, ...T.cols.map(c => c[1](g))].map(q).join(',')));
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob(['﻿' + lines.join('\n')], { type: 'text/csv' }));
+      a.download = `メルカリ分析_${T.name}_${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+    };
+    draw();
   }
 
   // ============ Yahoo!フリマ 面板：抓取 / 批量改价 / 批量停止 / 批量删除 ============
