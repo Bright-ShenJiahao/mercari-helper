@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.37
+// @version      5.38
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -2088,9 +2088,19 @@
       const sts = [...W.querySelectorAll('.fp-st:checked')].map(c => c.value);
       const kws = $('fp-kw').value.trim().toLowerCase().split(/\s+/).filter(Boolean);
       view = items.filter(r => sts.includes(r.status) && kws.every(k => r.title.toLowerCase().includes(k)));
+      if (fsort) {
+        const tm = r => Date.parse((r.status === 'SOLD' ? r.upd : r.open) || '') || 0;
+        const val = r => fsort === 'time' ? tm(r) : r[fsort] ?? -1;
+        view = [...view].sort((a, b) => (val(a) - val(b)) * fdir);
+      }
+      const arr = k => fsort === k ? (fdir > 0 ? ' ▲' : ' ▼') : ' ⇅';
       $('fp-count').textContent = `显示 ${view.length} 条`;
       $('fp-list').innerHTML = `<table style="width:100%;border-collapse:collapse"><thead style="position:sticky;top:0;background:#f0f0f0"><tr>
-        <th></th><th></th><th style="text-align:left">标题</th><th>状态</th><th>价格</th><th>浏览</th><th>赞</th><th>出品</th></tr></thead><tbody>${view.map(r => `
+        <th></th><th></th><th style="text-align:left">标题</th><th>状态</th>
+        <th class="fp-sort" data-k="price" style="cursor:pointer;color:#06c">价格${arr('price')}</th>
+        <th class="fp-sort" data-k="views" style="cursor:pointer;color:#06c">浏览${arr('views')}</th>
+        <th class="fp-sort" data-k="likes" style="cursor:pointer;color:#06c">赞${arr('likes')}</th>
+        <th class="fp-sort" data-k="time" style="cursor:pointer;color:#06c" title="在卖的按出品时间，已售出的按成交时间">时间${arr('time')}</th></tr></thead><tbody>${view.map(r => `
         <tr style="border-bottom:1px solid #eee;${r.status === 'CLOSE' ? 'background:#fff8e6' : ''}">
           <td><input type="checkbox" data-id="${r.id}" ${selected.has(r.id) ? 'checked' : ''}></td>
           <td>${r.thumb ? `<img src="${r.thumb}" style="width:44px;height:44px;object-fit:cover">` : ''}</td>
@@ -2101,6 +2111,14 @@
           <td style="text-align:center;color:#888">${esc(r.age)}</td></tr>`).join('')}</tbody></table>`;
       $('fp-sel').textContent = `已选 ${selected.size}`;
     }
+    // 点表头排序：第一次从大到小（时间是新→旧），再点反过来，第三次恢复
+    let fsort = null, fdir = -1;
+    $('fp-list').addEventListener('click', e => {
+      const th = e.target.closest('.fp-sort'); if (!th) return;
+      const k = th.dataset.k;
+      if (fsort !== k) { fsort = k; fdir = -1; } else if (fdir === -1) fdir = 1; else fsort = null;
+      render();
+    });
     $('fp-list').addEventListener('change', e => { const id = e.target.dataset.id; if (!id) return; e.target.checked ? selected.add(id) : selected.delete(id); $('fp-sel').textContent = `已选 ${selected.size}`; });
     W.querySelectorAll('.fp-st').forEach(c => c.addEventListener('change', () => { selected.clear(); render(); }));
     $('fp-kw').addEventListener('input', render);
