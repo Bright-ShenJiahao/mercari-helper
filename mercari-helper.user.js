@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.35
+// @version      5.36
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -1440,8 +1440,13 @@
       const lines = a.innerText.split('\n').map(s => s.trim()).filter(Boolean);
       const txt = lines.join(' ');
       const id = a.href.split('/').filter(Boolean).pop().split('?')[0];
-      const nums = txt.match(/ (\d+) (\d+) (\d+) /) || [];
-      const price = (txt.match(/¥\s*([\d,]+)/) || [])[1];
+      // 卡片上的顺序：¥ / 价格 / 赞 / 评论 / 浏览。按位置读，不能在整段文字里找「三个连着的数字」：
+      // 价格低于 1000 円（没有逗号）时会把价格当成赞数
+      const yi = lines.findIndex(l => l === '¥' || /^¥\s*[\d,]+$/.test(l));
+      const priceLine = yi >= 0 ? (/\d/.test(lines[yi]) ? lines[yi] : lines[yi + 1]) : '';
+      const price = (priceLine.match(/[\d,]+/) || [])[0] || (txt.match(/¥\s*([\d,]+)/) || [])[1];
+      const after = yi >= 0 ? lines.slice(yi + (/\d/.test(lines[yi]) ? 1 : 2)).filter(l => /^\d+$/.test(l)).slice(0, 3) : [];
+      const nums = after.length === 3 ? [null, ...after] : [];
       const upd = (txt.match(/半年以上前|\d+\s*(分|時間|日|か月|ヶ月|年)(以上)?前|\d{4}[\/年.-]\d{1,2}[\/月.-]\d{1,2}日?/) || [''])[0];
       const img = a.querySelector('img');
       return {
@@ -1856,7 +1861,8 @@
         if (!sa || !sb || Math.min(sa, sb) / Math.max(sa, sb) < 0.45) continue;   // 长度差太多，不可能很像
         const jc = jacc(a.bg, b.bg);
         if (d <= 14 && jc >= 0.5) { uni(i, j); continue; }
-        if (jc >= 0.8) uni(i, j);      // 照片不一样，但标题文字几乎一样（只是顺序、空格、颜色写法不同）
+        // 只看标题不可靠（申/龍、丁寧/陳夢、左/右利き 标题几乎一样但不是同一种），只在有一边没有主图时才用，而且要求非常像
+        if (d === 99 && jc >= 0.85) uni(i, j);
       }
     }
     const groups = {};
