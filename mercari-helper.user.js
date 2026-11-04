@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.33
+// @version      5.34
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -1781,13 +1781,25 @@
 
   // ============ 销售分析：自动识别同一种商品（主图指纹 + 标题），4 个标签 ============
   const HKEY = 'mbr_imghash';   // { 商品id: 'hex 指纹' }
-  const COLORS = ['赤', '黒', '青', '緑', '紫', '黄', '白', 'ピンク', 'オレンジ', '水色', 'red', 'black', 'blue', 'green', 'purple', 'pink', 'yellow'];
-  const normTitle = t => {
-    let s = String(t || '').normalize('NFKC').toLowerCase().replace(/[【】\[\]（）()「」『』!！?？☆★♪・,，、。]/g, ' ').replace(/\s+/g, ' ').trim();
-    for (let k = 0; k < 2; k++) s = s.replace(/\s*[a-z]{1,2}\s?\d{1,3}$/i, '').trim();   // 去掉末尾编号 A1 / w5 / ZZ3 / r 2（3 个字母的如 neo 3 不去）
-    return s;
+  // 颜色统一成一个说法
+  const COLOR_SYN = { 赤: ['赤', 'レッド', 'red'], 黒: ['黒', 'ブラック', 'black'], 青: ['青', 'ブルー', 'blue'], 緑: ['緑', 'グリーン', 'green'],
+    紫: ['紫', 'パープル', 'purple'], 黄: ['黄', 'イエロー', 'yellow'], 白: ['白', 'ホワイト', 'white'], ピンク: ['ピンク', 'pink'], オレンジ: ['オレンジ', 'orange'], 水色: ['水色'] };
+  const STOP = ['卓球', 'スポーツ', '人気', 'ピンポン', '新品', '未使用', '送料無料', '送料込み', 'おすすめ', '大人気', '公式', '正規品', 'カラー', 'color'];
+  const baseNorm = t => String(t || '').normalize('NFKC').toLowerCase().replace(/[【】\[\]（）()「」『』!！?？☆★♪・,，、。#＃]/g, ' ').replace(/\s+/g, ' ').trim();
+  const normTitle = t => { let s = baseNorm(t); for (let k = 0; k < 2; k++) s = s.replace(/\s*[a-z]{1,2}\s?\d{1,3}$/i, '').trim(); return s; };
+  const colorsOf = s => Object.keys(COLOR_SYN).filter(c => COLOR_SYN[c].some(w => s.includes(w))).sort().join(',');
+  const colorOk = (a, b) => !a || !b || a === b;      // 有一边没写颜色就不看颜色
+  // 议价 / 专用单：标题只有价格，或带「様」「専用」「リクエスト」「まとめ」——标题不可信，只按主图找原商品
+  const isDeal = t => { const s = baseNorm(t); return /^[\d,\s]+[-ー−~〜]\s*[\d,]+\s*(円)?$/.test(s) || /様|専用|リクエスト|まとめ|おまとめ/.test(s); };
+  // 标题指纹：去编号、去颜色、去常见无意义词、去空格，再切成两个字一组（不管词的顺序和空格怎么断）
+  const sigOf = t => {
+    let s = normTitle(t);
+    Object.values(COLOR_SYN).flat().forEach(w => { s = s.split(w).join(' '); });
+    STOP.forEach(w => { s = s.split(w).join(' '); });
+    return s.replace(/\s+/g, '');
   };
-  const colorsOf = s => COLORS.filter(c => s.includes(c)).sort().join(',');
+  const bigrams = s => { const out = new Set(); for (let i = 0; i < s.length - 1; i++) out.add(s.slice(i, i + 2)); return out; };
+  const jacc = (a, b) => { if (!a.size || !b.size) return 0; let n = 0; a.forEach(x => { if (b.has(x)) n++; }); return n / (a.size + b.size - n); };
   // 主图指纹：缩成 9×8 灰度，比较相邻像素明暗（dHash）
   async function imgHash(url) {
     const b = await fetchImg(url);
@@ -1812,37 +1824,50 @@
     const n = items.length, par = items.map((_, i) => i);
     const find = i => { while (par[i] !== i) { par[i] = par[par[i]]; i = par[i]; } return i; };
     const uni = (a, b) => { a = find(a); b = find(b); if (a !== b) par[b] = a; };
-    const info = items.map(r => { const nt = normTitle(r.title); return { nt, key: nt.replace(/\s/g, ''), col: colorsOf(nt), tok: new Set(nt.split(' ').filter(w => w.length > 1)), h: hashes[r.id] ? [parseInt(hashes[r.id].slice(0, 8), 16), parseInt(hashes[r.id].slice(8), 16)] : null }; });
-    // 1. 标题去掉编号后完全一样
-    const byKey = {};
-    info.forEach((x, i) => { if (x.key in byKey) uni(byKey[x.key], i); else byKey[x.key] = i; });
-    // 2. 主图几乎一样（颜色写法也一样）；3. 标题很像 + 主图比较像
+    const info = items.map(r => { const sig = sigOf(r.title);
+      return { deal: isDeal(r.title), sig, bg: bigrams(sig), col: colorsOf(baseNorm(r.title)),
+        h: hashes[r.id] ? [parseInt(hashes[r.id].slice(0, 8), 16), parseInt(hashes[r.id].slice(8), 16)] : null }; });
+    // 1. 标题指纹完全一样（议价单除外）
+    const bySig = {};
+    info.forEach((x, i) => { if (x.deal || x.sig.length < 4) return; const k = x.sig + '|' + x.col; if (k in bySig) uni(bySig[k], i); else bySig[k] = i; });
+    // 2. 主图几乎一样 → 同一种（议价单也靠这条找回原商品）
+    // 3. 主图比较像 + 标题文字大部分相同 → 同一种
     for (let i = 0; i < n; i++) {
-      const a = info[i]; if (!a.h) continue;
+      const a = info[i];
       for (let j = i + 1; j < n; j++) {
-        const b = info[j]; if (!b.h || a.col !== b.col || find(i) === find(j)) continue;
-        const d = hamming(a.h, b.h);
-        if (d <= 5) { uni(i, j); continue; }
-        if (d <= 12) {
-          let inter = 0; a.tok.forEach(w => { if (b.tok.has(w)) inter++; });
-          const jac = inter / (a.tok.size + b.tok.size - inter || 1);
-          if (jac >= 0.6) uni(i, j);
-        }
+        const b = info[j];
+        if (!colorOk(a.col, b.col) || find(i) === find(j)) continue;
+        const d = a.h && b.h ? hamming(a.h, b.h) : 99;
+        if (d <= 6) { uni(i, j); continue; }
+        if (a.deal || b.deal) continue;
+        const sa = a.bg.size, sb = b.bg.size;
+        if (!sa || !sb || Math.min(sa, sb) / Math.max(sa, sb) < 0.45) continue;   // 长度差太多，不可能很像
+        const jc = jacc(a.bg, b.bg);
+        if (d <= 14 && jc >= 0.5) { uni(i, j); continue; }
+        if (jc >= 0.8) uni(i, j);      // 照片不一样，但标题文字几乎一样（只是顺序、空格、颜色写法不同）
       }
     }
     const groups = {};
-    items.forEach((r, i) => { const g = find(i); (groups[g] = groups[g] || []).push(r); });
-    return Object.values(groups).map(list => {
-      const cnt = {}; list.forEach(r => { const k = normTitle(r.title); cnt[k] = (cnt[k] || 0) + 1; });
-      const name = Object.entries(cnt).sort((a, b) => b[1] - a[1])[0][0];
-      const by = s => list.filter(r => r.status === s);
-      const sold = by('sold'), pub = by('public'), stop = by('stopped');
-      return { name, list, thumb: list.find(r => r.thumb)?.thumb || '', sold: sold.length, pub: pub.length, stop: stop.length,
-        revenue: sold.reduce((s, r) => s + (r.price || 0), 0),
-        lastSold: sold.length ? Math.min(...sold.map(r => r.days ?? 99999)) : null,
-        oldestPub: pub.length ? Math.max(...pub.map(r => r.days ?? 0)) : null,
-        pubViews: pub.reduce((s, r) => s + (r.views || 0), 0), pubLikes: pub.reduce((s, r) => s + (r.likes || 0), 0) };
+    items.forEach((r, i) => { const g = find(i); (groups[g] = groups[g] || []).push({ r, i }); });
+    const out = [], dealLeft = [];
+    Object.values(groups).forEach(list => {
+      // 整组都是议价单（主图没找到原商品）：归到一个「无法识别」组
+      if (list.every(x => info[x.i].deal)) { dealLeft.push(...list.map(x => x.r)); return; }
+      const named = list.filter(x => !info[x.i].deal);
+      const cnt = {}; named.forEach(x => { const k = normTitle(x.r.title); cnt[k] = (cnt[k] || 0) + 1; });
+      out.push(mkGroup(Object.entries(cnt).sort((a, b) => b[1] - a[1])[0][0], list.map(x => x.r)));
     });
+    if (dealLeft.length) out.push(mkGroup('专用 / 议价单（主图没找到原商品）', dealLeft));
+    return out;
+  }
+  function mkGroup(name, list) {
+    const by = s => list.filter(r => r.status === s);
+    const sold = by('sold'), pub = by('public'), stop = by('stopped');
+    return { name, list, thumb: list.find(r => r.thumb)?.thumb || '', sold: sold.length, pub: pub.length, stop: stop.length,
+      revenue: sold.reduce((s, r) => s + (r.price || 0), 0),
+      lastSold: sold.length ? Math.min(...sold.map(r => r.days ?? 99999)) : null,
+      oldestPub: pub.length ? Math.max(...pub.map(r => r.days ?? 0)) : null,
+      pubViews: pub.reduce((s, r) => s + (r.views || 0), 0), pubLikes: pub.reduce((s, r) => s + (r.likes || 0), 0) };
   }
 
   async function openAnalysis(items) {
