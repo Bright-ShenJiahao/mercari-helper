@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.38
+// @version      5.39
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -375,8 +375,8 @@
   function nextData() { try { return JSON.parse(document.getElementById('__NEXT_DATA__').textContent); } catch (e) { return null; } }
   function deepFind(o, test, d = 0) { if (!o || typeof o !== 'object' || d > 10) return null; if (test(o)) return o; for (const k in o) { const r = deepFind(o[k], test, d + 1); if (r) return r; } return null; }
 
-  function readSrcFlea() {
-    const it = deepFind(nextData(), o => o.title && o.description != null && Array.isArray(o.images) && o.categoryList);
+  function readSrcFlea(nd) {
+    const it = deepFind(nd || nextData(), o => o.title && o.description != null && Array.isArray(o.images) && o.categoryList);
     if (!it) return null;
     const cats = (it.categoryList || []).map(c => c.name);
     const inTT = cats.includes('卓球');
@@ -1970,7 +1970,7 @@
   const FDB = 'mbr_fitems';     // { items:[{id,title,price,status:'OPEN'|'CLOSE',views,likes,age,thumb}], at }
   const FQ = 'mbr_fqueue';      // { op:'price'|'stop'|'del', label, ids, prices:{id:新价}, i, running, ok, ng }
   const FJOB = 'mbr_fjob';      // 编辑页任务 { id, op, price, token, ts, phase:'run'|'done'|'fail', msg }
-  const FOP = { price: '批量改价', stop: '批量停止', del: '批量删除' };
+  const FOP = { price: '批量改价', stop: '批量停止', del: '批量删除', relist: '批量再出品' };
 
   // ---- 编辑页：执行一件 ----
   async function fleaEditWorker() {
@@ -2052,6 +2052,7 @@
         <label><input type="checkbox" class="fp-st" value="OPEN" checked> 出品中</label>
         <label><input type="checkbox" class="fp-st" value="CLOSE" checked> 停止中</label>
         <label><input type="checkbox" class="fp-st" value="SOLD"> 已售出</label>
+        <label title="同一种商品（标题去掉编号后比对，有主图记录的也比对照片）挂了 2 件以上"><input type="checkbox" id="fp-dup"> 只看重复</label>
         <label>关键词 <input id="fp-kw" style="padding:4px 6px;border:1px solid #aaa;border-radius:4px;width:180px"></label>
         <span id="fp-count" style="color:#666"></span></div>
       <div style="display:flex;gap:8px;align-items:center;padding:8px 12px;border-bottom:1px solid #eee;flex-wrap:wrap">
@@ -2061,6 +2062,7 @@
         <span style="margin-left:10px">改价：<select id="fp-pm" style="padding:4px"><option value="set">统一设为</option><option value="add">每件加</option><option value="sub">每件减</option></select>
           <input id="fp-pv" type="number" min="0" style="padding:4px 6px;border:1px solid #aaa;border-radius:4px;width:90px"> 円</span>
         <button id="fp-price" style="${bt('#f60', '#fff')}">批量改价</button>
+        <button id="fp-relist" style="${bt('#e33', '#fff')}">批量再出品（停旧）</button>
         <button id="fp-stop" style="${bt('#555', '#fff')}">批量停止</button>
         <button id="fp-del" style="${bt('#c00', '#fff')}">批量删除</button>
         <button id="fp-qstop" style="${bt()}">暂停</button>
@@ -2088,7 +2090,14 @@
       const sts = [...W.querySelectorAll('.fp-st:checked')].map(c => c.value);
       const kws = $('fp-kw').value.trim().toLowerCase().split(/\s+/).filter(Boolean);
       view = items.filter(r => sts.includes(r.status) && kws.every(k => r.title.toLowerCase().includes(k)));
-      if (fsort) {
+      if ($('fp-dup').checked) {
+        // 在卖 / 停止中的商品里找同一种（已售出不算）
+        const live = items.filter(r => r.status !== 'SOLD');
+        const gs = groupItems(live.map(r => ({ ...r, status: 'public' })), GM_getValue(HKEY, {})).filter(g => g.list.length >= 2);
+        const gi = {}; gs.forEach((g, k) => g.list.forEach(r => { gi[r.id] = k; }));
+        view = view.filter(r => r.id in gi).sort((a, b) => gi[a.id] - gi[b.id]);
+      }
+      if (fsort && !$('fp-dup').checked) {
         const tm = r => Date.parse((r.status === 'SOLD' ? r.upd : r.open) || '') || 0;
         const val = r => fsort === 'time' ? tm(r) : r[fsort] ?? -1;
         view = [...view].sort((a, b) => (val(a) - val(b)) * fdir);
@@ -2122,6 +2131,7 @@
     $('fp-list').addEventListener('change', e => { const id = e.target.dataset.id; if (!id) return; e.target.checked ? selected.add(id) : selected.delete(id); $('fp-sel').textContent = `已选 ${selected.size}`; });
     W.querySelectorAll('.fp-st').forEach(c => c.addEventListener('change', () => { selected.clear(); render(); }));
     $('fp-kw').addEventListener('input', render);
+    $('fp-dup').addEventListener('change', () => { selected.clear(); render(); });
     $('fp-all').onchange = e => { view.forEach(r => e.target.checked ? selected.add(r.id) : selected.delete(r.id)); render(); };
     $('fp-add50').onclick = () => { let last = -1; view.forEach((r, i) => { if (selected.has(r.id)) last = i; }); view.slice(last + 1, last + 51).forEach(r => selected.add(r.id)); render(); };
     $('fp-close').onclick = () => W.remove();
@@ -2195,6 +2205,7 @@
       runQueue();
     }
     $('fp-stop').onclick = () => enqueue('stop', r => r.status === 'OPEN');
+    $('fp-relist').onclick = () => enqueue('relist', r => r.status === 'OPEN' || r.status === 'CLOSE', {}, '\n每件：自动出一件一样的新商品，成功后把旧的停止。每件之间隔 20~60 秒。\n第一次建议只选 1~2 件试。');
     $('fp-del').onclick = () => enqueue('del', r => r.status !== 'SOLD');
     $('fp-price').onclick = () => {
       const mode = $('fp-pm').value, v = parseInt($('fp-pv').value, 10);
@@ -2215,6 +2226,45 @@
 
     let busy = false;
     window.addEventListener('pagehide', () => { if (busy) GM_setValue(FQ, null); });
+    // 打开编辑页做一件（改价 / 停止 / 删除），等结果
+    async function editJob(id, op, price) {
+      const token = Math.random().toString(36).slice(2);
+      GM_setValue(FJOB, { id, op, price, token, ts: Date.now(), phase: 'run' });
+      const tab = GM_openInTab(`https://paypayfleamarket.yahoo.co.jp/item/${id}/edit`, { active: true, insert: true });
+      let res = null;
+      for (let s = 0; s < 90 && !res; s++) {
+        await sleep(1000);
+        const j = GM_getValue(FJOB, null);
+        if (j && j.token === token && j.phase !== 'run') res = j;
+      }
+      if (res?.phase === 'done' || !res) { try { tab.close(); } catch (e) {} }   // 失败的页面留着给你看
+      return res;
+    }
+    // 再出品一件：读旧商品 → 用多平台出品的流程在出品页自动填好、全自动出品
+    async function relistOne(id) {
+      const h = await fetch('/item/' + id, { credentials: 'include' }).then(r => r.text()).catch(() => '');
+      const m = h.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
+      let src = null; try { src = m && readSrcFlea(JSON.parse(m[1])); } catch (e) {}
+      if (!src || !src.images.length) return { phase: 'fail', msg: '读不到旧商品的信息' };
+      const cat = mapCategory(src.crumbs, src.raw);
+      const mm = GM_getValue(MKEY, null);
+      if (mm && (mm.phase === 'run' || mm.phase === 'wait') && mm.ts && Date.now() - mm.ts < 30 * 60e3) return { phase: 'fail', msg: '多平台出品正在运行，等它结束再再出品' };
+      const runId = 'frl' + Date.now().toString(36);
+      setM({ tasks: [{ plat: 'f', title: src.raw, price: src.price, cat: cat.flea, fship: src.method === 'らくらくメルカリ便' ? 'YAMATO' : 'JAPAN_POST', auto: true }],
+        i: 0, phase: 'run', runId, owner: runId, itemUrl: 'flea-relist', dry: false, cat, src, gap: null, nextNo: { prefix: '' }, msg: '', ts: Date.now() });
+      const tab = GM_openInTab('https://paypayfleamarket-sec.yahoo.co.jp/item/add', { active: true, insert: true });
+      log(`${id}：再出品中（出品页自动填写，全自动）…`);
+      for (let s = 0; s < 600; s++) {   // 最多等 10 分钟：自动检查没通过时会停在出品页等你处理
+        await sleep(1000);
+        const x = getM();
+        if (!x || x.runId !== runId) return { phase: 'fail', msg: '任务被别的操作覆盖了' };
+        if (x.phase === 'wait') { setM({ ...x, phase: 'done' }); return /跳过/.test(x.msg || '') ? { phase: 'fail', msg: '你点了跳过' } : { phase: 'done' }; }
+        if (x.phase === 'error' || x.phase === 'stopped') return { phase: 'fail', msg: x.msg || '已停止' };
+      }
+      try { tab.close(); } catch (e) {}
+      setM({ ...getM(), phase: 'stopped' });
+      return { phase: 'fail', msg: '10 分钟没完成，跳过' };
+    }
     async function runQueue() {
       if (busy) return; busy = true;
       try {
@@ -2223,27 +2273,25 @@
           if (!q || !q.running) break;
           if (q.i >= q.ids.length) { setQ({ ...q, running: false }); log(`${q.label} 完成：成功 ${q.ok}，失败 ${q.ng}`); showQ(); break; }
           const id = q.ids[q.i];
-          const token = Math.random().toString(36).slice(2);
-          GM_setValue(FJOB, { id, op: q.op, price: q.prices?.[id], token, ts: Date.now(), phase: 'run' });
-          const tab = GM_openInTab(`https://paypayfleamarket.yahoo.co.jp/item/${id}/edit`, { active: true, insert: true });
-          let res = null;
-          for (let s = 0; s < 90 && !res; s++) {
-            await sleep(1000);
-            const j = GM_getValue(FJOB, null);
-            if (j && j.token === token && j.phase !== 'run') res = j;
-          }
+          let res;
+          if (q.op === 'relist') {
+            res = await relistOne(id);
+            if (res?.phase === 'done') {   // 新的出品成功了，再把旧的停止
+              const st = await editJob(id, 'stop');
+              if (st?.phase !== 'done') res = { phase: 'fail', msg: '新的已出品，但旧的没停掉：' + (st?.msg || '超时') + '，请手动停止旧的' };
+            }
+          } else res = await editJob(id, q.op, q.prices?.[id]);
           const ok = res?.phase === 'done';
-          if (ok || !res) { try { tab.close(); } catch (e) {} }   // 失败的页面留着给你看
           log(`${id}：${ok ? '成功' : res ? '失败：' + res.msg : '超时，跳过'}`);
           if (ok) {   // 面板数据跟着更新
             const d = data();
             const items = q.op === 'del' ? d.items.filter(r => r.id !== id)
-              : d.items.map(r => r.id !== id ? r : q.op === 'stop' ? { ...r, status: 'CLOSE' } : { ...r, price: q.prices[id] });
+              : d.items.map(r => r.id !== id ? r : (q.op === 'stop' || q.op === 'relist') ? { ...r, status: 'CLOSE' } : { ...r, price: q.prices[id] });
             GM_setValue(FDB, { ...d, items }); selected.delete(id); render();
           }
           const q2 = getQ(); if (!q2) break;
           setQ({ ...q2, i: q2.i + 1, ok: q2.ok + (ok ? 1 : 0), ng: q2.ng + (ok ? 0 : 1) });
-          if (q2.i + 1 < q2.ids.length) await sleep(rand(GAP_MIN, GAP_MAX) * 1000);
+          if (q2.i + 1 < q2.ids.length) await sleep((q.op === 'relist' ? rand(BATCH_GAP_MIN, BATCH_GAP_MAX) : rand(GAP_MIN, GAP_MAX)) * 1000);
         }
       } finally { busy = false; showQ(); }
     }
