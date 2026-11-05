@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.42
+// @version      5.43
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -570,7 +570,9 @@
       // 按钮放在大图正下方（原来フリマアシスト那排链接的位置）
       if (document.getElementById('mbr-btn')) return;
       let clone = document.querySelector('[data-testid="image-0"]')?.closest('.slick-slider');
+      let inside = false;   // Yahoo 页面：放进主图区块里面的最后（放在它后面会被排版挤到页面最底下）
       if (!clone && readFn !== readSrc) {
+        inside = true;
         // Yahoo 商品页：找最大的那张主图，按钮放在主图区块下面
         if (!readFn()) return;
         const big = [...document.querySelectorAll('img')].filter(i => { const r = i.getBoundingClientRect(); return r.width > 200 && r.top < 1400; })
@@ -589,7 +591,7 @@
         const box = document.getElementById('mbr-btnbox') || (() => {
           const d = document.createElement('div'); d.id = 'mbr-btnbox';
           d.style.cssText = 'margin:10px 0 4px;display:flex;gap:8px';
-          clone.insertAdjacentElement('afterend', d);
+          if (inside) clone.appendChild(d); else clone.insertAdjacentElement('afterend', d);
           return d;
         })();
         box.appendChild(b);
