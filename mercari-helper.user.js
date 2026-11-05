@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.39
+// @version      5.40
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -595,7 +595,31 @@
       };
       add('mbr-btn', '多平台出品', '#e33', openDialog);
       add('mbr-stop', '停止', '#555', () => { const m = getM(); if (m) setM({ ...m, phase: 'stopped' }); toast('已停止', '#555'); });
+      // 单件出品：竖着三个按钮，点了直接去那个平台出一件（半自动，最后你自己点出品）
+      const col = document.createElement('div');
+      col.style.cssText = 'display:flex;flex-direction:column;gap:4px;margin-left:8px';
+      [['m', '→ 煤炉 出一件'], ['f', '→ フリマ 出一件'], ['a', '→ オク 出一件']].forEach(([k, label]) => {
+        const b = document.createElement('button');
+        b.textContent = label;
+        b.style.cssText = `padding:4px 12px;border:1px solid ${PLAT[k].color};border-radius:6px;background:#fff;color:${PLAT[k].color};cursor:pointer;font-size:13px;font-weight:bold;text-align:left`;
+        b.onclick = () => singleList(k);
+        col.appendChild(b);
+      });
+      document.getElementById('mbr-btnbox')?.appendChild(col);
     }, 500);
+
+    function singleList(k) {
+      const src = readFn();
+      if (!src) return toast('读不到这件商品的信息', '#c00');
+      const m0 = getM();
+      if (m0 && (m0.phase === 'run' || m0.phase === 'wait') && m0.ts && Date.now() - m0.ts < 30 * 60e3) return toast('还有出品任务在进行，等它结束（或点「停止」）再试', '#c00');
+      const cat = mapCategory(src.crumbs, src.raw);
+      const task = { plat: k, title: src.raw, price: src.price, cat: k === 'f' ? cat.flea : k === 'a' ? cat.auc : undefined,
+        fship: 'JAPAN_POST', ship: 'ship_delivery_yupacket', mship: k === 'm' ? 'ゆうゆうメルカリ便' : undefined, auto: false, manual: true };
+      setM({ tasks: [task], i: 0, phase: 'run', runId: Date.now().toString(36), owner: TAB_ID, itemUrl: location.href, dry: false, cat, src,
+        memKey, gap: null, nextNo: { prefix: '' }, msg: '' });
+      fire();
+    }
 
     function openDialog() {
       if (document.getElementById('mbr-dlg')) return;
@@ -979,6 +1003,11 @@
       if (mt.m.dry) {
         toast(`试运行：已全部填好（标题「${title}」），没有点出品。检查后手动关掉这页。`, '#06c');
         taskDone('试运行');
+        return;
+      }
+      if (mt.t.manual) {   // 单件出品：填好后等你检查，自己点「出品する」
+        banner(`<b>煤炉</b>：已填好「${title}」，配送「${mt.t.mship}」。请检查一下，没问题就点页面最下面的「<b>出品する</b>」。`);
+        if (await waitFor(() => !/\/sell\//.test(path()), 60 * 60e3, 1000)) { taskDone('煤炉出品成功'); document.getElementById('mbr-banner')?.remove(); toast('出品成功', '#090'); }
         return;
       }
     } else {
@@ -2052,11 +2081,12 @@
         <label><input type="checkbox" class="fp-st" value="OPEN" checked> 出品中</label>
         <label><input type="checkbox" class="fp-st" value="CLOSE" checked> 停止中</label>
         <label><input type="checkbox" class="fp-st" value="SOLD"> 已售出</label>
-        <label title="同一种商品（标题去掉编号后比对，有主图记录的也比对照片）挂了 2 件以上"><input type="checkbox" id="fp-dup"> 只看重复</label>
+
         <label>关键词 <input id="fp-kw" style="padding:4px 6px;border:1px solid #aaa;border-radius:4px;width:180px"></label>
         <span id="fp-count" style="color:#666"></span></div>
       <div style="display:flex;gap:8px;align-items:center;padding:8px 12px;border-bottom:1px solid #eee;flex-wrap:wrap">
         <label><input type="checkbox" id="fp-all"> 全选（当前筛选）</label>
+        <label title="在上面勾选的状态里，同一种商品挂了 2 件以上（标题去掉编号后比对，有主图记录的也比对照片）" style="background:#fff3cd;padding:2px 6px;border-radius:4px"><input type="checkbox" id="fp-dup"> 只看重复</label>
         <button id="fp-add50" style="${bt()}">+50</button>
         <span id="fp-sel">已选 0</span>
         <span style="margin-left:10px">改价：<select id="fp-pm" style="padding:4px"><option value="set">统一设为</option><option value="add">每件加</option><option value="sub">每件减</option></select>
@@ -2092,7 +2122,7 @@
       view = items.filter(r => sts.includes(r.status) && kws.every(k => r.title.toLowerCase().includes(k)));
       if ($('fp-dup').checked) {
         // 在卖 / 停止中的商品里找同一种（已售出不算）
-        const live = items.filter(r => r.status !== 'SOLD');
+        const live = items.filter(r => r.status !== 'SOLD' && sts.includes(r.status));   // 跟上面勾选的状态联动
         const gs = groupItems(live.map(r => ({ ...r, status: 'public' })), GM_getValue(HKEY, {})).filter(g => g.list.length >= 2);
         const gi = {}; gs.forEach((g, k) => g.list.forEach(r => { gi[r.id] = k; }));
         view = view.filter(r => r.id in gi).sort((a, b) => gi[a.id] - gi[b.id]);
