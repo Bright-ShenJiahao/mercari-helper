@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.41
+// @version      5.42
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -559,6 +559,7 @@
     return null;
   }
 
+  const sameItem = m => { try { const u = new URL(m.itemUrl); return u.origin + u.pathname === location.origin + location.pathname; } catch (e) { return false; } };
   function multiPlatformUI(itemId, readFn = readSrc) {
     // 每次打开商品页一个专属编号：只有点了「开始」的这一份负责派发。
     // 煤炉是单页应用，看过的旧商品留下的监听不会撤掉，靠这个编号让它们不重复派发。
@@ -594,7 +595,12 @@
         box.appendChild(b);
       };
       add('mbr-btn', '多平台出品', '#e33', openDialog);
-      add('mbr-stop', '停止', '#555', () => { const m = getM(); if (m) setM({ ...m, phase: 'stopped' }); toast('已停止', '#555'); });
+      add('mbr-stop', '停止', '#555', () => {
+        const m = getM();
+        if (!m || !(m.phase === 'run' || m.phase === 'wait')) return toast('现在没有进行中的出品任务', '#555');
+        if (m.owner !== TAB_ID && !confirm('正在进行的出品任务不是这一页发起的（可能是别的商品或面板的批量再出品）。确定要停止它吗？')) return;
+        setM({ ...m, phase: 'stopped' }); toast('已停止', '#555');
+      });
       // 单件出品：竖着三个按钮，点了直接去那个平台出一件（半自动，最后你自己点出品）
       const col = document.createElement('div');
       col.style.cssText = 'display:flex;flex-direction:column;gap:4px;margin-left:8px';
@@ -856,7 +862,7 @@
 
     function fire() {
       const m = getM();
-      if (!m || m.itemUrl !== location.href || m.phase !== 'run' || (m.owner && m.owner !== TAB_ID)) return;
+      if (!m || !sameItem(m) || m.phase !== 'run' || (m.owner && m.owner !== TAB_ID)) return;
       const t = m.tasks[m.i];
       const fk = (m.runId || '') + ':' + m.i;
       if (m.fired === fk) { setM({ ...m, dupFire: (m.dupFire || 0) + 1, dupBy: TAB_ID.slice(0, 4) }); return; }   // 这件已经派发过，不再开页面
@@ -882,7 +888,7 @@
     });
     let counting = false;
     GM_addValueChangeListener(MKEY, async (_k, _o, m) => {
-      if (!m || m.itemUrl !== location.href || (m.owner && m.owner !== TAB_ID)) return;
+      if (!m || !sameItem(m) || (m.owner && m.owner !== TAB_ID)) return;
       if (m.phase === 'error') return toast('出错停止：' + m.msg, '#c00');
       if (m.phase === 'stopped') return toast('已停止', '#555');
       if (m.phase === 'done') return toast(m.msg || '全部完成', '#090');
@@ -914,7 +920,10 @@
   }
 
   // 目标页面共用：取当前多平台任务
-  function curTask(plat) {
+  let myTaskKey = null;   // 这个页面领到的任务（runId:第几件），完成/失败/自动点出品前都要对得上
+  const keyOf = m => (m.runId || m.ts) + ':' + m.i;
+  const isMine = () => { const m = getM(); return !!m && m.phase === 'run' && keyOf(m) === myTaskKey; };
+  async function curTask(plat) {
     const m = getM();
     if (!m || m.phase !== 'run' || !m.ts) return null;
     const ttl = plat === 'm' ? 3 * 60e3 : 60 * 60e3;   // 煤炉 3 分钟内、Yahoo 60 分钟内有效
@@ -931,10 +940,15 @@
       return null;
     }
     if (!m.claim || m.claim.key !== key) setM({ ...m, claim: { key, tab: me } });
-    return { m: getM(), t };
+    // 两个页面几乎同时打开时可能都写了 claim：等一下再读，不是自己的就退出
+    await sleep(400 + Math.random() * 300);
+    const m2 = getM();
+    if (!m2 || m2.claim?.tab !== me || m2.phase !== 'run') { toast('这是重复打开的页面，本页关闭', '#c00'); closeSoon(); return null; }
+    myTaskKey = keyOf(m2);
+    return { m: m2, t };
   }
-  const taskDone = msg => { const m = getM(); if (m && m.phase === 'run') setM({ ...m, phase: 'wait', msg }); };
-  const taskFail = msg => { const m = getM(); if (m && m.phase === 'run') setM({ ...m, phase: 'error', msg }); toast('出错：' + msg, '#c00'); };
+  const taskDone = msg => { const m = getM(); if (m && m.phase === 'run' && keyOf(m) === myTaskKey) setM({ ...m, phase: 'wait', msg }); };
+  const taskFail = msg => { const m = getM(); if (m && m.phase === 'run' && keyOf(m) === myTaskKey) setM({ ...m, phase: 'error', msg }); toast('出错：' + msg, '#c00'); };
 
   // 半自动页面顶部的黄色提示条
   function banner(html, onSkip) {
@@ -952,6 +966,8 @@
     b.querySelector('#mbr-stopall').onclick = () => { const m = getM(); if (m) setM({ ...m, phase: 'stopped' }); b.remove(); };
   }
 
+  // 煤炉出品完成：离开出品页，而且不是在类别/状态/配送这些子页面里
+  const mercariListed = () => !/^\/sell\/(create|categories|conditions|shipping_methods|brands|sizes|templates|draft)/.test(path()) && /^\/(item|sell|mypage)/.test(path());
   // 页面上红色的提示文字（排除脚本自己的提示）
   function redTexts() {
     const out = new Set();
@@ -977,7 +993,7 @@
   // ============ 煤炉出品页（多平台 / 再出品 共用）：自己填表 ============
   async function sellPage() {
     const j = getJob();
-    const mt = curTask('m');
+    const mt = await curTask('m');
     const relist = !mt && j && j.op === 'relist' && j.phase === 'filling' && j.ts && Date.now() - j.ts < 3 * 60e3 && j.src ? j : null;
     if (!mt && !relist) return;
 
@@ -987,7 +1003,7 @@
         banner(`<b style="color:#c00">煤炉出错：</b>${msg}。<br>可以手动改好后自己点「出品する」（成功后会自动继续下一件），或者点「跳过这件」继续下一件。`);
         const bb = document.getElementById('mbr-banner'); if (bb) bb.style.background = '#ffd6d6';
         // 你手动出品成功（离开出品页）也算这件完成
-        (async () => { if (await waitFor(() => !/\/sell\/create/.test(path()) && !/\/sell\//.test(path()), 30 * 60e3, 1000)) { taskDone('手动出品成功'); closeSoon(); } })();
+        (async () => { if (await waitFor(mercariListed, 30 * 60e3, 1000)) { taskDone('手动出品成功'); closeSoon(); } })();
         return;
       }
       else if (getJob()?.phase === 'filling') { finishJob(false, msg); toast('出错：' + msg, '#c00'); }
@@ -1007,7 +1023,7 @@
       }
       if (mt.t.manual) {   // 单件出品：填好后等你检查，自己点「出品する」
         banner(`<b>煤炉</b>：已填好「${title}」，配送「${mt.t.mship}」。请检查一下，没问题就点页面最下面的「<b>出品する</b>」。`);
-        if (await waitFor(() => !/\/sell\//.test(path()), 60 * 60e3, 1000)) { taskDone('煤炉出品成功'); document.getElementById('mbr-banner')?.remove(); toast('出品成功', '#090'); }
+        if (await waitFor(mercariListed, 60 * 60e3, 1000)) { taskDone('煤炉出品成功'); document.getElementById('mbr-banner')?.remove(); toast('出品成功', '#090'); }
         return;
       }
     } else {
@@ -1064,7 +1080,7 @@
 
   // ============ Yahoo!フリマ 出品页（半自动） ============
   async function fleaPage() {
-    const ct = curTask('f');
+    const ct = await curTask('f');
     if (!ct) return;
     watchBackground('Yahoo!フリマ 出品页');
     const { m, t } = ct;
@@ -1214,7 +1230,7 @@
     if (t.auto && !m.dry && btnOn() && catOk && fshipOk && titleEl()?.value === t.title) {
       banner(`<b>Yahoo!フリマ 全自动</b> ${m.i + 1}/${m.tasks.length}：检查无误，${'几秒后'}自动点「出品する」…`);
       await sleep(rand(2000, 4000));
-      if (btnOn() && getM()?.phase === 'run') { listBtn().click(); toast('已自动点出品，等待完成…', '#090'); }
+      if (btnOn() && isMine()) { listBtn().click(); toast('已自动点出品，等待完成…', '#090'); }
     } else {
       if (t.auto && !m.dry) tip = '<b style="color:#c00">全自动检查没通过，退回半自动。</b> ' + tip;
       banner(tip);
@@ -1237,13 +1253,16 @@
 
     // 等你点出品：离开 /item/add 视为成功
     const start = location.href;
-    const done = await waitFor(() => location.href !== start || /出品が完了|出品しました/.test(document.body.innerText.slice(0, 3000)), 3600 * 1000, 1000);
+    // 只认明确的完成：页面出现「出品しました/出品が完了」，或者跳到了完成页 / 新商品页。点了别的链接不算
+    const fleaDone = () => /出品が完了|出品しました|出品手続きが完了/.test(document.body.innerText.slice(0, 3000))
+      || (location.href !== start && (/complete|done|finish|success/i.test(location.pathname) || /^\/item\/[a-z]\d{5,}/.test(location.pathname)));
+    const done = await waitFor(fleaDone, 3600 * 1000, 1000);
     if (done) { taskDone('Yahoo!フリマ 出品成功'); document.getElementById('mbr-banner')?.remove(); toast('出品成功', '#090'); closeSoon(); }
   }
 
   // ============ ヤフオク 出品页（半自动） ============
   async function aucPage() {
-    const ct = curTask('a');
+    const ct = await curTask('a');
     if (!ct) return;
     watchBackground('ヤフオク 出品页');
     const { m, t } = ct;
@@ -1295,7 +1314,7 @@
         await sleep(rand(2000, 4000));
         const go = [...document.querySelectorAll('button,input[type=submit],input[type=button],a')]
           .find(b => /出品する/.test(b.value || b.textContent) && !/修正/.test(b.value || b.textContent) && !b.disabled);
-        if (go && getM()?.phase === 'run') { go.click(); return; }
+        if (go && isMine()) { go.click(); return; }
       }
       banner(m.dry
         ? '<b>试运行</b>（ヤフオク 确认页）：<b>不要点出品</b>，点「跳过这件」继续。'
@@ -1424,7 +1443,7 @@
       banner(`<b>ヤフオク 全自动</b> ${m.i + 1}/${m.tasks.length}：检查无误，自动点「確認する」…`);
       await sleep(rand(2000, 4000));
       const go = document.getElementById('submit_form_btn');
-      if (go && getM()?.phase === 'run') go.click();
+      if (go && isMine()) go.click();
     } else if (t.auto && !m.dry) {
       toast('全自动检查没通过，退回半自动，请看提示条', '#c00');
     }
@@ -1762,7 +1781,8 @@
           if (!ok && q.op === 'relist') {
             log(`${id}：${res ? res.msg : '超时'}，核实实际状态…`);
             const st = await checkStatus(id);
-            if (st === 'stopped') {
+            const wasPublic = data().items.find(r => r.id === id)?.status === 'public';
+            if (st === 'stopped' && wasPublic) {
               ok = true;
               res = { ...(res || {}), phase: 'done', msg: '核实：旧的已停止，算成功' };
               try { tab.close(); } catch (e) {}
@@ -2024,6 +2044,7 @@
         if (String(pe.value).replace(/\D/g, '') !== String(j.price)) return finish('fail', '价格没填进去');
         btn(/^変更する$/).click();
       } else {
+        if (j.op === 'stop' && !btn(/^出品を停止する$/) && btn(/出品を再開/)) return finish('done', '本来就是停止状态');
         const main = btn(j.op === 'stop' ? /^出品を停止する$/ : /^商品を削除する$/);
         if (!main) return finish('fail', j.op === 'stop' ? '没有「出品を停止する」（可能已经停止了）' : '没有「商品を削除する」');
         main.click();
@@ -2045,7 +2066,11 @@
       // 还是没跳转：直接去查商品页，确认结果
       if (!done && j.op === 'del') {
         const h = await fetch('/item/' + id, { credentials: 'include' }).then(r => r.status === 404 ? '' : r.text()).catch(() => null);
-        if (h === '' || (h && /見つかりません|削除されました/.test(h))) done = true;
+        if (h === '') done = true;
+        else if (h) {
+          const mm = h.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
+          try { if (mm && !deepFind(JSON.parse(mm[1]), o => o.id === id && o.title)) done = true; } catch (e) {}
+        }
       }
       if (done) { finish('done', 'OK'); toast('完成', '#090'); }
       else finish('fail', '点了按钮但页面没跳转，可能弹出了别的提示，这页留着你看一下');
@@ -2265,7 +2290,11 @@
     $('fp-qgo').onclick = () => { const q = getQ(); if (q && q.i < q.ids.length) { setQ({ ...q, running: true }); log('继续'); runQueue(); } };
 
     let busy = false;
-    window.addEventListener('pagehide', () => { if (busy) GM_setValue(FQ, null); });
+    window.addEventListener('pagehide', () => {
+      if (busy) GM_setValue(FQ, null);
+      const m = getM();
+      if (m && /^frl/.test(m.runId || '') && (m.phase === 'run' || m.phase === 'wait')) setM({ ...m, phase: 'stopped', msg: '面板已关闭' });
+    });
     // 打开编辑页做一件（改价 / 停止 / 删除），等结果
     async function editJob(id, op, price) {
       const token = Math.random().toString(36).slice(2);
@@ -2302,7 +2331,7 @@
         if (x.phase === 'error' || x.phase === 'stopped') return { phase: 'fail', msg: x.msg || '已停止' };
       }
       try { tab.close(); } catch (e) {}
-      setM({ ...getM(), phase: 'stopped' });
+      const x = getM(); if (x && x.runId === runId) setM({ ...x, phase: 'stopped' });
       return { phase: 'fail', msg: '10 分钟没完成，跳过' };
     }
     async function runQueue() {
@@ -2316,7 +2345,8 @@
           let res;
           if (q.op === 'relist') {
             res = await relistOne(id);
-            if (res?.phase === 'done') {   // 新的出品成功了，再把旧的停止
+            const wasClosed = data().items.find(r => r.id === id)?.status === 'CLOSE';
+            if (res?.phase === 'done' && !wasClosed) {   // 新的出品成功了，再把旧的停止（本来就停止中的不用）
               const st = await editJob(id, 'stop');
               if (st?.phase !== 'done') res = { phase: 'fail', msg: '新的已出品，但旧的没停掉：' + (st?.msg || '超时') + '，请手动停止旧的' };
             }
