@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.40
+// @version      5.41
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -2084,9 +2084,13 @@
 
         <label>关键词 <input id="fp-kw" style="padding:4px 6px;border:1px solid #aaa;border-radius:4px;width:180px"></label>
         <span id="fp-count" style="color:#666"></span></div>
+      <div id="fp-row2" style="display:flex;gap:14px;align-items:center;padding:6px 12px;border-bottom:1px solid #eee;background:#fff8e1;flex-wrap:wrap">
+        <b style="color:#a60">出品中的商品再筛选：</b>
+        <label title="同一种商品挂了 2 件以上（标题去掉编号后比对；做过销售分析的也会比对主图）"><input type="checkbox" id="fp-dup"> 只看重复（同一种挂了 2 件以上）</label>
+        <label title="同一种商品（包括以前卖掉的）一件都没卖出过；需要抓取时连已售出一起抓"><input type="checkbox" id="fp-never"> 只看从没卖出过的</label>
+        <span style="color:#999;font-size:12px">（只在勾了「出品中」时出现；两个可以同时勾）</span></div>
       <div style="display:flex;gap:8px;align-items:center;padding:8px 12px;border-bottom:1px solid #eee;flex-wrap:wrap">
         <label><input type="checkbox" id="fp-all"> 全选（当前筛选）</label>
-        <label title="在上面勾选的状态里，同一种商品挂了 2 件以上（标题去掉编号后比对，有主图记录的也比对照片）" style="background:#fff3cd;padding:2px 6px;border-radius:4px"><input type="checkbox" id="fp-dup"> 只看重复</label>
         <button id="fp-add50" style="${bt()}">+50</button>
         <span id="fp-sel">已选 0</span>
         <span style="margin-left:10px">改价：<select id="fp-pm" style="padding:4px"><option value="set">统一设为</option><option value="add">每件加</option><option value="sub">每件减</option></select>
@@ -2120,14 +2124,20 @@
       const sts = [...W.querySelectorAll('.fp-st:checked')].map(c => c.value);
       const kws = $('fp-kw').value.trim().toLowerCase().split(/\s+/).filter(Boolean);
       view = items.filter(r => sts.includes(r.status) && kws.every(k => r.title.toLowerCase().includes(k)));
-      if ($('fp-dup').checked) {
-        // 在卖 / 停止中的商品里找同一种（已售出不算）
-        const live = items.filter(r => r.status !== 'SOLD' && sts.includes(r.status));   // 跟上面勾选的状态联动
-        const gs = groupItems(live.map(r => ({ ...r, status: 'public' })), GM_getValue(HKEY, {})).filter(g => g.list.length >= 2);
-        const gi = {}; gs.forEach((g, k) => g.list.forEach(r => { gi[r.id] = k; }));
-        view = view.filter(r => r.id in gi).sort((a, b) => gi[a.id] - gi[b.id]);
+      const openOn = sts.includes('OPEN');
+      $('fp-row2').style.display = openOn ? 'flex' : 'none';
+      const dupOn = openOn && $('fp-dup').checked, neverOn = openOn && $('fp-never').checked;
+      if (dupOn || neverOn) {
+        // 用全部商品（含已售出）分组，再只看出品中的
+        const all = items.map(r => ({ ...r, status: { OPEN: 'public', CLOSE: 'stopped', SOLD: 'sold' }[r.status] }));
+        const gs = groupItems(all, GM_getValue(HKEY, {}));
+        const gi = {}, gOpen = {}, gSold = {};
+        gs.forEach((g, k) => g.list.forEach(r => { gi[r.id] = k; gOpen[k] = (gOpen[k] || 0) + (r.status === 'public' ? 1 : 0); gSold[k] = (gSold[k] || 0) + (r.status === 'sold' ? 1 : 0); }));
+        view = view.filter(r => r.status === 'OPEN' && (!dupOn || gOpen[gi[r.id]] >= 2) && (!neverOn || !gSold[gi[r.id]]));
+        view.sort((a, b) => gi[a.id] - gi[b.id]);
+        if (neverOn && !items.some(r => r.status === 'SOLD')) log('提示：数据里没有已售出，「从没卖出过」不准，请重新抓取');
       }
-      if (fsort && !$('fp-dup').checked) {
+      if (fsort && !dupOn && !neverOn) {
         const tm = r => Date.parse((r.status === 'SOLD' ? r.upd : r.open) || '') || 0;
         const val = r => fsort === 'time' ? tm(r) : r[fsort] ?? -1;
         view = [...view].sort((a, b) => (val(a) - val(b)) * fdir);
@@ -2161,7 +2171,7 @@
     $('fp-list').addEventListener('change', e => { const id = e.target.dataset.id; if (!id) return; e.target.checked ? selected.add(id) : selected.delete(id); $('fp-sel').textContent = `已选 ${selected.size}`; });
     W.querySelectorAll('.fp-st').forEach(c => c.addEventListener('change', () => { selected.clear(); render(); }));
     $('fp-kw').addEventListener('input', render);
-    $('fp-dup').addEventListener('change', () => { selected.clear(); render(); });
+    ['fp-dup', 'fp-never'].forEach(id => $(id).addEventListener('change', () => { selected.clear(); render(); }));
     $('fp-all').onchange = e => { view.forEach(r => e.target.checked ? selected.add(r.id) : selected.delete(r.id)); render(); };
     $('fp-add50').onclick = () => { let last = -1; view.forEach((r, i) => { if (selected.has(r.id)) last = i; }); view.slice(last + 1, last + 51).forEach(r => selected.add(r.id)); render(); };
     $('fp-close').onclick = () => W.remove();
