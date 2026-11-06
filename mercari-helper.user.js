@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.43
+// @version      5.44
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -1843,8 +1843,10 @@
     b.id = 'mbr-open';
     b.textContent = '助手面板';
     b.style.cssText = 'position:fixed;left:20px;bottom:80px;z-index:2147483600;padding:14px 26px;border:none;border-radius:28px;background:#e33;color:#fff;font-size:18px;font-weight:bold;cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,.3)';
-    b.onclick = openPanel;
+    // 不在「出品した商品」页时：先跳过去，到了自动打开面板
+    b.onclick = () => { if (/^\/mypage\/listings/.test(location.pathname)) openPanel(); else { sessionStorage.mbrOpenPanel = '1'; location.href = '/mypage/listings'; } };
     document.body.appendChild(b);
+    if (sessionStorage.mbrOpenPanel && /^\/mypage\/listings/.test(location.pathname)) { delete sessionStorage.mbrOpenPanel; setTimeout(openPanel, 1500); }
   }
 
   // ============ 销售分析：自动识别同一种商品（主图指纹 + 标题），4 个标签 ============
@@ -2085,7 +2087,8 @@
     b.id = 'mbr-fopen';
     b.textContent = '助手面板';
     b.style.cssText = 'position:fixed;left:20px;bottom:80px;z-index:2147483600;padding:14px 26px;border:none;border-radius:28px;background:#f03;color:#fff;font-size:18px;font-weight:bold;cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,.3)';
-    b.onclick = openFleaPanel;
+    b.onclick = () => { if (/^\/my\/item\/selling/.test(location.pathname)) openFleaPanel(); else { sessionStorage.mbrOpenFPanel = '1'; location.href = '/my/item/selling'; } };
+    if (sessionStorage.mbrOpenFPanel && /^\/my\/item\/selling/.test(location.pathname)) { delete sessionStorage.mbrOpenFPanel; setTimeout(openFleaPanel, 1500); }
     document.body.appendChild(b);
   }
 
@@ -2383,7 +2386,7 @@
     if (window.top !== window.self) return;   // 抓取用的 iframe 里不运行
     const p = path();
     if (location.hostname === 'paypayfleamarket.yahoo.co.jp') {
-      if (/^\/my\/item\/selling/.test(p)) addFleaPanelButton(); else document.getElementById('mbr-fopen')?.remove();
+      addFleaPanelButton();   // 任何页面都显示
       if (/^\/item\/[^/]+\/edit/.test(p)) { once('fedit:' + p, fleaEditWorker); return; }
       const id = (p.match(/^\/item\/([^/?#]+)\/?$/) || [])[1]; if (id) once('fsrc:' + id, () => multiPlatformUI(id, readSrcFlea));
       return;
@@ -2398,8 +2401,7 @@
     }
     if (location.hostname === 'paypayfleamarket-sec.yahoo.co.jp') { if (/^\/item\/add/.test(p)) once('flea', fleaPage); return; }
     if (location.hostname === 'auctions.yahoo.co.jp') { once('auc:' + p, aucPage); return; }
-    if (/^\/mypage\/listings/.test(p)) addPanelButton();
-    else document.getElementById('mbr-open')?.remove();
+    addPanelButton();   // 任何页面都显示
     if (/^\/item\//.test(p)) once('item:' + idFromPath(), itemPage);
     else if (/^\/sell\/create/.test(p)) once('sell', sellPage);
     else if (/^\/sell\/edit\//.test(p)) once('edit:' + idFromPath(), editPageWorker);
