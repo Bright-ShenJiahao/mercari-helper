@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.54
+// @version      5.55
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -112,17 +112,9 @@
     }
 
     if (j.op === 'stop-del' && j.phase === 'run') {
-      toast('删除图少的那件：先停止…');
-      await waitFor(() => btnByText(/出品を再開|一時停止|出品を停止/), 20000);
-      const stopBtn = btnByText(/一時停止|出品を停止/);
-      if (stopBtn && !btnByText(/出品を再開/)) {
-        await clickWithConfirm(stopBtn, /^(一時停止する|停止する|出品を一時停止する)$/);
-        const st = await waitFor(() => btnByText(/出品を再開/) || !/\/sell\/edit\//.test(path()), 15000);
-        if (!st) { finishJob(false, '停止没成功'); return; }
-        if (!/\/sell\/edit\//.test(path())) { location.href = location.origin + '/sell/edit/' + id; return; }   // 停止后跳走了：回编辑页再删
-      }
-      if (!btnByText(/出品を再開/)) { finishJob(false, '没停下来，不删'); return; }
-      const del = await waitFor(() => document.querySelector('[data-testid="delete-button"]') || btnByText(/この商品を削除する/));
+      // 煤炉出品中的商品可以直接删除（有些商品编辑页上根本没有「一時停止」按钮），所以不先停止
+      toast('删除图少的那件…');
+      const del = await waitFor(() => document.querySelector('[data-testid="delete-button"]') || btnByText(/この商品を削除する/), 25000);
       if (!del) { finishJob(false, '找不到删除按钮'); return; }
       await clickWithConfirm(del, /^削除する$/);
       const gone = await waitFor(() => !/\/sell\/edit\//.test(path()) || !document.querySelector('[data-testid="delete-button"]'), 15000);
@@ -2043,7 +2035,7 @@
       for (let t = 0; t < limitSec; t++) {
         await sleep(1000);
         const jj = getJob();
-        if (jj && jj.token === token && (jj.phase === 'done' || jj.phase === 'error')) { if (jj.phase === 'done') { try { tab.close(); } catch (e) {} } return jj; }
+        if (jj && jj.token === token && (jj.phase === 'done' || jj.phase === 'error')) { if (jj.phase === 'done' || op === 'stop-del') { try { tab.close(); } catch (e) {} } return jj; }
         if (!getQ()?.running) break;
       }
       try { tab.close(); } catch (e) {}
