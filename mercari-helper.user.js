@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.56
+// @version      5.57
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -1899,6 +1899,8 @@
     async function openSingleDialog() {
       const items = data().items;
       if (!items.some(r => r.status === 'public')) return alert('先「全量抓取」一次');
+      const age = Math.floor((Date.now() - (data().at || 0)) / 60e3);
+      if (age >= 10 && !confirm(`数据是 ${age} 分钟前抓取的。这期间删掉或改过的商品还会出现在结果里。\n建议先「快速刷新」或「全量抓取」再检查。\n\n仍然用旧数据检查吗？（执行时每件还会再确认商品还在不在）`)) return;
       const W = document.createElement('div');
       W.id = 'mbr-single';
       W.style.cssText = 'position:fixed;inset:24px;z-index:2147483647;background:#fff;border-radius:10px;box-shadow:0 4px 30px rgba(0,0,0,.45);display:flex;flex-direction:column;font-size:14px;color:#222';
@@ -1915,18 +1917,13 @@
       $s('sg-close').onclick = () => { stop = true; W.remove(); };
       // 1. 每件出品中的商品只查「第 2 张图在不在」
       const pub = items.filter(r => r.status === 'public');
-      const has2 = {}, gone = [];
+      const has2 = {};
       let done = 0;
       const one = async r => {
         let st = 0;
         for (let k = 0; k < 3; k++) { st = (await fetchImgS(`https://static.mercdn.net/item/detail/webp/photos/${r.id}_2.jpg`)).status; if (st) break; await sleep(1000); }
         has2[r.id] = st === 200 ? true : (st === 404 || st === 403) ? false : null;
-        // 第 2 张没有时，再确认第 1 张还在：已经删掉的商品图片全没了，不能当成「只有 1 张」
-        if (has2[r.id] === false) {
-          let s1 = 0;
-          for (let k = 0; k < 3; k++) { s1 = (await fetchImgS(`https://static.mercdn.net/item/detail/webp/photos/${r.id}_1.jpg`)).status; if (s1) break; await sleep(1000); }
-          if (s1 !== 200) { has2[r.id] = null; gone.push(r.id); }
-        }
+
         done++; if (done % 10 === 0) $s('sg-st').textContent = `查第 2 张图 ${done}/${pub.length}…（只查不改）`;
       };
       for (let i = 0; i < pub.length; i += 4) { if (stop) return; await Promise.all(pub.slice(i, i + 4).map(one)); }
@@ -1982,7 +1979,7 @@
       for (const id in fCnt) cntCache['f:' + id] = fCnt[id];
       GM_setValue(HKEY, hashes);
       const ok = rows.filter(x => x.found.length), none = rows.filter(x => !x.found.length);
-      $s('sg-st').textContent = `出品中 ${pub.length} 件里只有 1 张图的：${singles.length} 件｜找到来源 ${ok.length}｜没找到 ${none.length}${gone.length ? `｜已经不存在 ${gone.length} 件（数据旧了，已排除）` : ''}${unknown - gone.length > 0 ? `｜查不准 ${unknown - gone.length} 件（已排除）` : ''}`;
+      $s('sg-st').textContent = `出品中 ${pub.length} 件里只有 1 张图的：${singles.length} 件｜找到来源 ${ok.length}｜没找到 ${none.length}${unknown ? `｜查不准 ${unknown} 件（已排除）` : ''}`;
       const esc = v => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
       const ST = { public: '出品中', stopped: '停止中', sold: '已售出' };
       $s('sg-body').innerHTML = `<div style="color:#666;line-height:1.7">请一件件核对：左边是只有 1 张图的商品；右边选一个「同一种、图片齐全」的来源（默认选图最多的）。对的勾上，点「执行已勾选的」。<br>
@@ -2010,6 +2007,22 @@
         log(`开始修复 ${sel.length} 件`);
         runQueue();
       };
+    }
+    // 商品还在不在：在后台打开它的编辑页看（删掉的商品图片还会留在服务器上，所以不能靠图片判断）
+    async function existsCheck(id) {
+      const f = document.createElement('iframe');
+      f.style.cssText = 'position:fixed;left:-5000px;top:0;width:1000px;height:800px';
+      f.src = '/sell/edit/' + id + '?mbrcheck=1';
+      document.body.appendChild(f);
+      await new Promise(r => f.onload = r);
+      const r = await waitFor(() => {
+        const d = f.contentDocument; if (!d) return null;
+        if (d.querySelector('[data-testid="delete-button"]') || btnByText(/出品を再開|一時停止/, d)) return 'yes';
+        if (/ページが見つかりません|削除された可能性/.test(d.body?.innerText || '')) return 'no';
+        return null;
+      }, 20000);
+      f.remove();
+      return r === 'yes' ? true : r === 'no' ? false : null;
     }
     async function checkStatus(id) {
       const f = document.createElement('iframe');
@@ -2061,7 +2074,7 @@
           const id = q.ids[q.i];
           if (q.op === 'fix1') {
             const J = q.jobs[id];
-            if ((await fetchImgS(`https://static.mercdn.net/item/detail/webp/photos/${id}_1.jpg`)).status === 404) {
+            if (await existsCheck(id) === false) {
               log(`${id}：这件已经不存在（已删除），跳过，不重新出品`);
               const q3 = getQ(); setQ({ ...q3, i: q3.i + 1, ng: q3.ng + 1 }); continue;
             }
