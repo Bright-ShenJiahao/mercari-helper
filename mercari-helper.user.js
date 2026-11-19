@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.59
+// @version      5.60
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -1935,6 +1935,8 @@
         if (tc && dc && tc !== dc) why.push(`颜色：标题「${tc}」/ 说明「${dc}」`);
         const tt = thick(r.title), dt = thick(h);
         if (tt && dt && tt !== dt) why.push(`厚度：标题「${tt}」/ 说明「${dt}」`);
+        const ts = spongeOf(r.title), ds = spongeOf(h);
+        if (ts && ds && ts !== ds) why.push(`海绵：标题「${ts === 'ox' ? 'OX（无海绵）' : '带海绵'}」/ 说明「${ds === 'ox' ? 'OX（无海绵）' : '带海绵'}」`);
         const tco = code(r.title), dco = code(first);
         if (tco && dco && tco !== dco) why.push(`尾号：标题「${tco}」/ 说明第一行「${dco}」`);
         if (why.length) bad.push({ r, why });
@@ -2017,7 +2019,7 @@
         const p = singles[i];
         $s('sg-st').textContent = `找来源 ${i + 1}/${singles.length}…`;
         const pb = bg(p), ph = await getH(p);
-        const cand = items.filter(r => r.id !== p.id && has2[r.id] !== false && colorOk(colorsOf(baseNorm(r.title)), colorsOf(baseNorm(p.title))) && jacc(pb, bg(r)) >= 0.5);
+        const cand = items.filter(r => r.id !== p.id && has2[r.id] !== false && colorOk(colorsOf(baseNorm(r.title)), colorsOf(baseNorm(p.title))) && spongeOk(r.title, p.title) && jacc(pb, bg(r)) >= 0.5);
         const found = [];
         for (const c of cand.slice(0, 30)) {
           const ch = await getH(c);
@@ -2043,7 +2045,7 @@
         const x = noSrc[i];
         $s('sg-st').textContent = `去 フリマ 找来源 ${i + 1}/${noSrc.length}…`;
         const pb = bg(x.p), ph = await getH(x.p);
-        const cand = fitems.filter(r => colorOk(colorsOf(baseNorm(r.title)), colorsOf(baseNorm(x.p.title))) && jacc(pb, bigrams(sigOf(r.title))) >= 0.5).slice(0, 15);
+        const cand = fitems.filter(r => colorOk(colorsOf(baseNorm(r.title)), colorsOf(baseNorm(x.p.title))) && spongeOk(r.title, x.p.title) && jacc(pb, bigrams(sigOf(r.title))) >= 0.5).slice(0, 15);
         for (const c of cand) {
           const ch = await getH({ id: 'f:' + c.id, thumb: c.thumb });
           if (!ph || !ch || hamming(ph, ch) > 6) continue;
@@ -2263,7 +2265,7 @@
       ['找出只有 1 张图的商品', '#c33', () => openSingleDialog(),
         '用途：找出所有「出品中、但只有 1 张图」的商品（包括旧商品已经删掉、上面那个功能配不上对的）。<br>用法：<br>① 先「全量抓取」。<br>② 点这里：只查不改。先查每件有没有第 2 张图（2000 件约 10~20 分钟），再给每件找「标题像 + 主图同一张 + 有 2 张以上」的商品当来源（出品中 / 停止中 / 已售出都可以）。<br>③ 你一件件核对，右边可以换来源，对的勾上，点「执行已勾选的」。<br>④ 每件：用来源的图片重新出品（<b>标题、价格用原来那件的</b>），成功后才删掉只有 1 张图的那件；来源商品不动。<br>「没找到来源」的单独列出，可能本来就只拍了 1 张，需要手动处理。'],
       ['核对说明（颜色 / 厚度 / 尾号）', '#06c', () => openDescCheck(),
-        '用途：找出「标题和说明对不上」的商品——颜色、厚度不一样，或者标题尾号和说明第一行的尾号不一样。<br>用法：先「快速刷新」，再点这里，输入要核对最近几小时内出品的（修复那批大约从凌晨 2:38 开始，填 4 左右）。只读不改，每件在后台打开编辑页读说明，100 件约 5~10 分钟。<br>结果只列有问题的，点「改说明」打开编辑页手动改。'],
+        '用途：找出「标题和说明对不上」的商品——颜色、厚度、OX / 带海绵不一样，或者标题尾号和说明第一行的尾号不一样。<br>用法：先「快速刷新」，再点这里，输入要核对最近几小时内出品的（修复那批大约从凌晨 2:38 开始，填 4 左右）。只读不改，每件在后台打开编辑页读说明，100 件约 5~10 分钟。<br>结果只列有问题的，点「改说明」打开编辑页手动改。'],
       ['修复记录（核对说明）', '#06c', () => openFixHistory(),
         '用途：5.57 及以前的「找出只有 1 张图的商品」有个错误：<b>说明、状态、配送用的是来源商品的</b>（只有标题和价格是自己的），颜色、厚度可能对不上。这里列出那批商品，方便你逐件核对改说明。<br>用法：在面板右边日志里，从「开始修复 N 件」往后全部复制，粘贴到这里的框里，点「整理」。会列出：新商品的标题（=原来的标题）、当时用的来源（标题、ID，点开看来源的说明）。你按标题找到新商品，对照改说明。<br>5.58 以后只借图片，不会再有这个问题。'],
       ['检查再出品图片', '#f60', () => $('mp-fix').click(),
@@ -2302,6 +2304,14 @@
     if (sessionStorage.mbrOpenPanel && /^\/mypage\/listings/.test(location.pathname)) { delete sessionStorage.mbrOpenPanel; setTimeout(openPanel, 1500); }
   }
 
+  // OX（不带海绵）还是带海绵：OX / スポンジなし → 'ox'；写了海绵厚度（0.5~2.5mm）或 スポンジあり → 'sp'；都没写 → ''
+  const spongeOf = t => {
+    const s = String(t || '').normalize('NFKC');
+    if (/(^|[^a-z])ox([^a-z]|$)|スポンジ\s*(なし|無し|無)|ノースポンジ|一枚ラバー/i.test(s)) return 'ox';
+    if (/スポンジ\s*(あり|有り|付き|付)/.test(s) || /(?<![\d.])(0\.[5-9]|1\.\d|2\.[0-5])\s*(mm|ミリ)?(?![\d.])|(?<![\d.])[12]\s*mm/i.test(s)) return 'sp';
+    return '';
+  };
+  const spongeOk = (a, b) => { const x = spongeOf(a), y = spongeOf(b); return !x || !y || x === y; };
   const thumbOf = r => (/^m\d+$/.test(r.id) ? `https://static.mercdn.net/thumb/item/webp/${r.id}_1.jpg` : '') || (r.thumb && /^https?:/.test(r.thumb) ? r.thumb : '');
   // 「特殊功能」菜单：每个功能带使用说明
   function specialMenu(list) {
