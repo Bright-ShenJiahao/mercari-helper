@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.45
+// @version      5.46
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -358,6 +358,14 @@
       } catch (e) { res(null); }
     });
   }
+  function fetchImgS(url) {
+    return new Promise(res => {
+      try {
+        GM_xmlhttpRequest({ method: 'GET', url, responseType: 'blob', timeout: 30000,
+          onload: r => res({ status: r.status, blob: r.status === 200 ? r.response : null }), onerror: () => res({ status: 0 }), ontimeout: () => res({ status: 0 }) });
+      } catch (e) { res({ status: 0 }); }
+    });
+  }
   async function downloadImages(src, say) {
     const files = [];
     const urls = [...src.images];
@@ -365,10 +373,21 @@
     const m = /^(https:\/\/static\.mercdn\.net\/item\/detail\/orig\/photos\/m\d+_)(\d+)\.jpg$/.exec(urls[urls.length - 1] || '');
     for (let i = 0; i < 20; i++) {
       let url = urls[i];
-      if (!url && m) url = `${m[1]}${i + 1}.jpg`;
+      const probe = !url;   // 页面上没数到、按编号往后试的
+      if (probe && m) url = `${m[1]}${i + 1}.jpg`;
       if (!url) break;
-      const b = await fetchImg(url);
-      if (!b || !/^image\//.test(b.type || 'image/jpeg') || b.size < 2000) { if (i >= src.images.length) break; else continue; }
+      let b = null, st = 0;
+      for (let k = 0; k < 3 && !b; k++) {   // 失败重试 3 次
+        const r = await fetchImgS(url); st = r.status;
+        if (r.blob && /^image\//.test(r.blob.type || 'image/jpeg') && r.blob.size >= 2000) b = r.blob;
+        else if (probe && (st === 404 || st === 403)) break;   // 按编号试到头了
+        else if (k < 2) await sleep(1500);
+      }
+      if (!b) {
+        if (probe && (st === 404 || st === 403)) break;
+        files.err = `第 ${i + 1} 张图下载失败（重试 3 次）`;
+        break;
+      }
       files.push(new File([b], `photo${i + 1}.jpg`, { type: b.type || 'image/jpeg' }));
       say(`下载图片 ${files.length}…`);
     }
@@ -454,6 +473,7 @@
     say(`下载图片 0/${src.images.length}…`);
     const files = await downloadImages(src, say);
     if (!files.length) return '图片下载失败';
+    if (files.err) return files.err + '，图不齐，这件不出品';
     window.__mbrImgCount = files.length;
     const upl = document.querySelector('[data-testid="photo-upload"]');
     if (!upl) return '找不到上传框';
@@ -1108,10 +1128,12 @@
     if (!await waitFor(() => titleEl() && priceEl(), 30000)) return banner('<b style="color:#c00">Yahoo!フリマ 出品页没打开</b>');
     await sleep(1500);
     // 1. 图片：模拟把图片拖进拖放区
+    let wantImg = 0;
     if (photoCount() === 0) {
       sayF('下载图片…');
       const files = await downloadImages(src, sayF);
-      if (!files.length) return banner('<b style="color:#c00">图片下载失败</b>，请手动加图片');
+      if (!files.length || files.err) return banner(`<b style="color:#c00">${files.err || '图片下载失败'}</b>，图不齐，没有自动出品。请手动加图片后自己点出品，或点「跳过这件」。`);
+      wantImg = files.length;
       const zone = [...document.querySelectorAll('div')].filter(e => /ドラッグ/.test(e.textContent)).sort((x, y) => x.textContent.length - y.textContent.length)[1];
       const dt = new DataTransfer();
       files.forEach(f => dt.items.add(f));
@@ -1239,7 +1261,9 @@
          ${btnOn() ? '请检查一下，没问题就点页面最下面的「<b>出品する</b>」。'
                    : `<b style="color:#c00">出品按钮还是灰的</b>${emp.length ? '，看起来没填：' + emp.join('、') : ''}。可以点「再试一次」，或手动改一下价格再点空白处。`}`;
     // 全自动：标题、类别、配送都对，按钮也亮，就自己点出品
-    if (t.auto && !m.dry && btnOn() && catOk && fshipOk && titleEl()?.value === t.title) {
+    const imgOk = photoCount() >= wantImg;
+    if (!imgOk) tip = `<b style="color:#c00">图片少了 ${wantImg - photoCount()} 张（应该 ${wantImg} 张）</b>。` + tip;
+    if (t.auto && !m.dry && imgOk && btnOn() && catOk && fshipOk && titleEl()?.value === t.title) {
       banner(`<b>Yahoo!フリマ 全自动</b> ${m.i + 1}/${m.tasks.length}：检查无误，${'几秒后'}自动点「出品する」…`);
       await sleep(rand(2000, 4000));
       if (btnOn() && isMine()) { listBtn().click(); toast('已自动点出品，等待完成…', '#090'); }
@@ -1357,9 +1381,13 @@
     const src = m.src;
     const sayA = x => toast(x, '#c90');
     // 1. 图片：放进上传框
+    let wantImgA = 0;
+    const aucImgCount = () => { let n = 0; for (let i = 1; i <= 20; i++) if (document.getElementById('auc_image_fullpath' + i)?.value) n++; return n; };
     if (!document.getElementById('auc_image_fullpath1')?.value) {
       sayA('下载图片…');
       const files = await downloadImages(src, sayA);
+      if (!files.length || files.err) return banner(`<b style="color:#c00">${files.err || '图片下载失败'}</b>，图不齐，没有自动出品。请手动加图片后自己点「確認する」，或点「跳过这件」。`);
+      wantImgA = files.length;
       const inp = document.getElementById('selectFileMultiple');
       if (files.length && inp) {
         const dt = new DataTransfer();
@@ -1451,13 +1479,14 @@
          检查后点「<b>確認する</b>」，再在确认页点「<b>出品する</b>」。`);
     toast('等你确认', '#c90');
     // 全自动：类别、配送、标题都对，就点「確認する」
-    if (t.auto && !m.dry && catOk && shipTxt && titleEl()?.value === t.title) {
+    const imgOkA = aucImgCount() >= wantImgA;
+    if (t.auto && !m.dry && imgOkA && catOk && shipTxt && titleEl()?.value === t.title) {
       banner(`<b>ヤフオク 全自动</b> ${m.i + 1}/${m.tasks.length}：检查无误，自动点「確認する」…`);
       await sleep(rand(2000, 4000));
       const go = document.getElementById('submit_form_btn');
       if (go && isMine()) go.click();
     } else if (t.auto && !m.dry) {
-      toast('全自动检查没通过，退回半自动，请看提示条', '#c00');
+      toast(imgOkA ? '全自动检查没通过，退回半自动，请看提示条' : `图片少了 ${wantImgA - aucImgCount()} 张，没有自动出品，请检查`, '#c00');
     }
   }
 
