@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.48
+// @version      5.49
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -1845,7 +1845,15 @@
       }
       GM_setValue(HKEY, hashes);
       const hv = id => hashes[id] ? [parseInt(hashes[id].slice(0, 8), 16), parseInt(hashes[id].slice(8), 16)] : null;
-      const same = (a, b) => { const x = hv(a), y = hv(b); return x && y && hamming(x, y) <= 6; };
+      const dist = (a, b) => { const x = hv(a), y = hv(b); return x && y ? hamming(x, y) : null; };
+      const same = (a, b) => { const d = dist(a, b); return d != null && d <= 6; };
+      // 诊断：每个候选（标题一样的 新↔旧）为什么配上 / 没配上
+      const diag = [];
+      groups.forEach(([, g]) => g.P.forEach(p => g.S.forEach(s => {
+        const d = dist(s.id, p.id);
+        const why = cnt[s.id] == null || cnt[p.id] == null ? '张数查不准' : d == null ? '主图没比对上（缺缩略图）' : d > 6 ? `主图不像（差 ${d}）` : cnt[p.id] >= cnt[s.id] ? '张数没变少' : '✓ 配上';
+        diag.push(`旧 ${s.id}（${cnt[s.id]}张）↔ 新 ${p.id}（${cnt[p.id]}张）：${why}`);
+      })));
       // 3. 配对：标题一样 + 主图同一张；一对一才自动配，分不清的列为「需要手动确认」
       const one = [], fewer = [], manual = [];
       groups.forEach(([, g]) => {
@@ -1870,6 +1878,7 @@
       $f('fx-body').innerHTML = `<div style="color:#666">请一对一对核对（点标题打开商品页看），对的勾上，最后点右上角「执行已勾选的」。默认都不勾。<br>
         执行时每一对：先用旧的重新出品一件（图片齐全），<b>成功后</b>才删掉图少的那件；重新出品失败就不删。</div>`
         + table(one, '只剩 1 张') + table(fewer, '少了几张（不是 1 张）')
+        + `<details style="margin-top:16px"><summary style="cursor:pointer;color:#06c">诊断（${typeof GM_info !== 'undefined' ? GM_info.script.version : ''}）：候选 ${diag.length} 对，点开看每一对的情况</summary><pre style="font-size:12px;white-space:pre-wrap">${esc(diag.slice(0, 300).join('\n'))}</pre></details>`
         + (manual.length ? `<h3 style="margin:14px 0 6px">需要手动确认（${manual.length}）：同一个标题、同一张照片有好几件，分不清是哪一对，不自动处理</h3>`
           + manual.map(x => `<div>新的 <a href="/item/${x.p.id}" target="_blank">${esc(x.p.title)}</a>（${cnt[x.p.id]} 张）↔ 可能的旧的：${x.s.map(s => `<a href="/item/${s.id}" target="_blank">${s.id}</a>（${cnt[s.id]} 张）`).join('、')}</div>`).join('') : '');
       const upd = () => { const n = W.querySelectorAll('.fx-c:checked').length; $f('fx-go').disabled = !n; $f('fx-go').textContent = `执行已勾选的（${n} 对）`; };
