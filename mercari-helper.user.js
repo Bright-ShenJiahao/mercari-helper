@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.60
+// @version      5.61
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -1898,10 +1898,11 @@
     }
     // ============ 核对说明：标题里的颜色 / 厚度 / 尾号，和说明（前半部分、第一行）对不对得上 ============
     async function openDescCheck() {
-      const hrs = +prompt('核对最近几小时内出品的商品？（修复那批大约从凌晨 2:38 开始）', '4');
-      if (!hrs) return;
-      const ageH = u => { const s = String(u || '').normalize('NFKC'); const m = s.match(/(\d+)\s*(分|時間|日)/); return !m ? 1e9 : m[2] === '分' ? +m[1] / 60 : m[2] === '時間' ? +m[1] : +m[1] * 24; };
-      const list = data().items.filter(r => r.status === 'public' && ageH(r.upd) <= hrs);
+      const ans = prompt('核对范围：\n・填数字 = 最近几小时内出品的（修复那批填 4）\n・填 0 或留空 = 全部出品中的商品（约 2000 件，要 20~40 分钟）', '0');
+      if (ans === null) return;
+      const hrs = +ans || 0;
+      const ageH = u => { const s = String(u || '').normalize('NFKC'); const m = s.match(/(\d+)\s*(分|時間|日|か月|ヶ月|ケ月|年)/); return !m ? 1e9 : m[2] === '分' ? +m[1] / 60 : m[2] === '時間' ? +m[1] : m[2] === '日' ? +m[1] * 24 : m[2] === '年' ? +m[1] * 8760 : +m[1] * 720; };
+      const list = data().items.filter(r => r.status === 'public' && (!hrs || ageH(r.upd) <= hrs));
       if (!list.length) return alert('没找到这段时间内出品的商品（先「快速刷新」一次）');
       const W = document.createElement('div');
       W.style.cssText = 'position:fixed;inset:24px;z-index:2147483647;background:#fff;border-radius:10px;box-shadow:0 4px 30px rgba(0,0,0,.45);display:flex;flex-direction:column;font-size:14px;color:#222';
@@ -1923,12 +1924,12 @@
         f.onload = async () => { const t = await waitFor(() => f.contentDocument?.querySelector('textarea[name="description"]')?.value, 20000); res(t || null); f.remove(); };
       });
       const bad = [];
-      for (let i = 0; i < list.length; i++) {
-        if (stop) return;
-        const r = list[i];
-        W.querySelector('#dc-st').textContent = `读取说明 ${i + 1}/${list.length}…（只读不改）｜有问题 ${bad.length} 件`;
+      let done = 0;
+      const checkOne = async r => {
         const d = await readDesc(r.id);
-        if (d == null) { bad.push({ r, why: ['说明读不出来，请手动看'] }); continue; }
+        done++;
+        W.querySelector('#dc-st').textContent = `读取说明 ${done}/${list.length}…（只读不改）｜有问题 ${bad.length} 件`;
+        if (d == null) { bad.push({ r, why: ['说明读不出来，请手动看'] }); return; }
         const h = head(d), first = N(d).split('\n').find(x => x.trim()) || '';
         const why = [];
         const tc = colorsOf(baseNorm(r.title)), dc = colorsOf(baseNorm(h));
@@ -1940,10 +1941,10 @@
         const tco = code(r.title), dco = code(first);
         if (tco && dco && tco !== dco) why.push(`尾号：标题「${tco}」/ 说明第一行「${dco}」`);
         if (why.length) bad.push({ r, why });
-        await sleep(400);
-      }
+      };
+      for (let i = 0; i < list.length; i += 3) { if (stop) return; await Promise.all(list.slice(i, i + 3).map(checkOne)); await sleep(300); }
       const esc = v => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
-      W.querySelector('#dc-st').textContent = `最近 ${hrs} 小时出品的 ${list.length} 件，有问题 ${bad.length} 件`;
+      W.querySelector('#dc-st').textContent = `${hrs ? `最近 ${hrs} 小时出品的` : '全部出品中的'} ${list.length} 件，有问题 ${bad.length} 件`;
       W.querySelector('#dc-out').innerHTML = `<div style="color:#666;margin-bottom:6px">只比对说明的前半部分（后面的关键词列表不看）。说明里没写颜色 / 厚度 / 尾号的不算问题。点「改说明」直接打开编辑页。</div>
         <table style="width:100%;border-collapse:collapse"><tr style="background:#f0f0f0"><th style="text-align:left">标题</th><th style="text-align:left">对不上的地方</th><th></th></tr>
         ${bad.map(x => `<tr style="border-bottom:1px solid #eee"><td style="padding:4px">${esc(x.r.title)}<br><span style="color:#888">${x.r.id}</span></td><td style="padding:4px;color:#c00">${x.why.map(esc).join('<br>')}</td>
