@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.57
+// @version      5.58
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -172,6 +172,7 @@
         await sleep(800);
         const src = readSrc();
         if (j.override) { if (j.override.title) src.raw = j.override.title; if (j.override.price) src.price = j.override.price; }
+        if (j.imgOverride) src.images = j.imgOverride;   // 只换图片
         setJob({ ...getJob(), phase: 'filling', ts: Date.now(), src });
         trace('商品页：读好商品，打开出品页');
         GM_openInTab(location.origin + '/sell/create', { active: true, insert: true });
@@ -1895,6 +1896,30 @@
         runQueue();
       };
     }
+    function openFixHistory() {
+      const W = document.createElement('div');
+      W.style.cssText = 'position:fixed;inset:24px;z-index:2147483647;background:#fff;border-radius:10px;box-shadow:0 4px 30px rgba(0,0,0,.45);display:flex;flex-direction:column;font-size:14px;color:#222;padding:12px';
+      W.innerHTML = `<div style="display:flex;gap:10px;align-items:center"><b style="font-size:17px">修复记录（核对说明）</b><span style="flex:1"></span><button id="fh-x" style="padding:5px 12px">关闭</button></div>
+        <div style="color:#666;margin:6px 0">把面板右边日志里「开始修复 N 件」之后的内容全部复制，粘贴到下面，点「整理」。</div>
+        <textarea id="fh-t" style="height:120px;width:100%;font-size:12px"></textarea><div><button id="fh-go" style="padding:6px 14px;margin:6px 0;background:#06c;color:#fff;border:none;border-radius:6px">整理</button></div>
+        <div id="fh-out" style="flex:1;overflow:auto"></div>`;
+      document.body.appendChild(W);
+      W.querySelector('#fh-x').onclick = () => W.remove();
+      W.querySelector('#fh-go').onclick = () => {
+        const txt = W.querySelector('#fh-t').value;
+        const map = Object.fromEntries(data().items.map(r => [r.id, r]));
+        const pairs = {}, done = new Set();
+        for (const m of txt.matchAll(/(m\d+)：用 (f:z\w+|m\d+) 的图片重新出品/g)) pairs[m[1]] = m[2];
+        for (const m of txt.matchAll(/(m\d+)：完成|(m\d+)：新的已出品/g)) done.add(m[1] || m[2]);
+        const rows = [...done].filter(id => pairs[id]);
+        const esc = v => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
+        W.querySelector('#fh-out').innerHTML = `<div style="margin:6px 0">共 ${rows.length} 件需要核对说明（新商品的标题 = 下面的标题，在「出品中」里按标题搜就能找到）：</div>
+          <table style="width:100%;border-collapse:collapse"><tr style="background:#f0f0f0"><th>#</th><th style="text-align:left">新商品标题（核对它的说明）</th><th style="text-align:left">当时用的来源（说明是从它来的）</th></tr>
+          ${rows.map((id, i) => { const s = pairs[id], fl = /^f:/.test(s), sid = fl ? s.slice(2) : s, sr = map[sid];
+            return `<tr style="border-bottom:1px solid #eee"><td>${i + 1}</td><td>${esc(map[id]?.title || '（标题不在数据里：' + id + '）')}</td>
+              <td><a href="${fl ? 'https://paypayfleamarket.yahoo.co.jp/item/' + sid : '/item/' + sid}" target="_blank">${esc(sr?.title || sid)}</a>${fl ? '（フリマ）' : ''}</td></tr>`; }).join('')}</table>`;
+      };
+    }
     // ============ 找出所有「只有 1 张图」的出品中商品，找同一种、图片齐全的商品当来源 ============
     async function openSingleDialog() {
       const items = data().items;
@@ -1983,7 +2008,7 @@
       const esc = v => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
       const ST = { public: '出品中', stopped: '停止中', sold: '已售出' };
       $s('sg-body').innerHTML = `<div style="color:#666;line-height:1.7">请一件件核对：左边是只有 1 张图的商品；右边选一个「同一种、图片齐全」的来源（默认选图最多的）。对的勾上，点「执行已勾选的」。<br>
-        执行时：用来源的图片重新出品一件，<b>标题和价格用左边这件的</b>；成功后才删掉左边只有 1 张图的那件。来源商品不会被停止或改动。</div>
+        执行时：<b>只借来源的图片</b>，标题、说明、类别、状态、配送、价格全部用左边这件自己的，重新出品一件；成功后才删掉左边只有 1 张图的那件。来源商品不会被停止或改动。</div>
         ${ok.length ? `<table style="width:100%;border-collapse:collapse;margin-top:8px"><tr style="background:#f0f0f0"><th></th><th colspan="2">只有 1 张图（会删掉）</th><th>选来源（图片齐全，只读图片）</th></tr>
         ${ok.map((x, i) => `<tr style="border-bottom:1px solid #eee;vertical-align:top"><td><input type="checkbox" class="sg-c" data-i="${i}"></td>
           <td style="padding:4px"><img src="${thumbOf(x.p)}" style="width:48px;height:48px;object-fit:cover"></td>
@@ -2001,7 +2026,7 @@
         const sel = [...W.querySelectorAll('.sg-c:checked')].map(c => { const x = ok[+c.dataset.i]; const src = W.querySelector(`input[name="sg-r${c.dataset.i}"]:checked`)?.value; return { src, bad: x.p.id, title: x.p.title, price: x.p.price }; }).filter(x => x.src);
         if (!sel.length) return;
         if (getQ()?.running) return alert('还有队列在运行，先暂停或等它结束。');
-        if (!confirm(`执行 ${sel.length} 件：\n用来源的图片重新出品（标题、价格用原来那件的），成功后删掉只有 1 张图的那件。\n来源商品不动。删除不能恢复。确定开始？`)) return;
+        if (!confirm(`执行 ${sel.length} 件：\n只借来源的图片，其他（标题、说明、价格…）全用原来那件的，重新出品；成功后删掉只有 1 张图的那件。\n来源商品不动。删除不能恢复。确定开始？`)) return;
         setQ({ op: 'fix1', label: '修复只有 1 张图的商品', ids: sel.map(x => x.bad), jobs: Object.fromEntries(sel.map(x => [x.bad, x])), i: 0, running: true, ok: 0, ng: 0 });
         W.remove();
         log(`开始修复 ${sel.length} 件`);
@@ -2079,20 +2104,23 @@
               const q3 = getQ(); setQ({ ...q3, i: q3.i + 1, ng: q3.ng + 1 }); continue;
             }
             log(`${id}：用 ${J.src} 的图片重新出品…`);
-            let rA;
-            if (/^f:/.test(J.src)) {   // 来源是 Yahoo!フリマ：读那件商品，直接去煤炉出品页填
+            // 只借来源的图片；标题、说明、类别、状态、配送、价格全部用这件自己的
+            let rA, imgs = null;
+            if (/^f:/.test(J.src)) {
               const fid = J.src.slice(2);
-              const src = await new Promise(res => GM_xmlhttpRequest({ method: 'GET', url: 'https://paypayfleamarket.yahoo.co.jp/item/' + fid, timeout: 30000,
+              const fsrc = await new Promise(res => GM_xmlhttpRequest({ method: 'GET', url: 'https://paypayfleamarket.yahoo.co.jp/item/' + fid, timeout: 30000,
                 onload: r => { try { const m = r.responseText.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/); res(m && readSrcFlea(JSON.parse(m[1]))); } catch (e) { res(null); } },
                 onerror: () => res(null), ontimeout: () => res(null) }));
-              if (!src || src.images.length < 2) rA = { phase: 'error', msg: '读不到 フリマ 商品的图片' };
-              else { src.raw = J.title; src.price = J.price; rA = await runJob('relist', J.src, 'filling', '/sell/create', true, 240, { noStop: true, ts: Date.now(), src }); }
-            } else rA = await runJob('relist', J.src, 'clone', '/item/' + J.src, true, 240, { noStop: true, override: { title: J.title, price: J.price } });
+              if (fsrc && fsrc.images.length >= 2) imgs = fsrc.images;
+            } else imgs = [`https://static.mercdn.net/item/detail/orig/photos/${J.src}_1.jpg`];   // 后面的 _2 _3… 下载时会自动往后取
+            if (!imgs) rA = { phase: 'error', msg: '读不到来源商品的图片' };
+            else rA = await runJob('relist', id, 'clone', '/item/' + id, true, 240, { noStop: true, imgOverride: imgs });
             let ok = false, msg;
             if (rA?.phase === 'done') {
               const rB = await runJob('stop-del', id, 'run', '/sell/edit/' + id, true, 90);
               ok = rB?.phase === 'done';
               msg = ok ? '完成：已重新出品（图片齐全），只有 1 张图的已删除' : `新的已出品，但只有 1 张图的 ${id} 没删掉（${rB?.msg || '超时'}），请手动删`;
+              const hist = GM_getValue('mbr_fixhist', []); hist.push({ t: Date.now(), bad: id, title: J.title, src: J.src, v: 2 }); GM_setValue('mbr_fixhist', hist.slice(-2000));
             } else msg = `重新出品失败（${rA?.msg || '超时'}），原来那件没动`;
             log(`${id}：${msg}`);
             if (!getQ()) break;
@@ -2183,6 +2211,8 @@
         '用途：把抓到的全部商品（标题、状态、价格、浏览、赞、最后更新、ID）下载成 Excel 能打开的 CSV，可以发给别的 AI 分析。<br>用法：先「全量抓取」，再点这里。'],
       ['找出只有 1 张图的商品', '#c33', () => openSingleDialog(),
         '用途：找出所有「出品中、但只有 1 张图」的商品（包括旧商品已经删掉、上面那个功能配不上对的）。<br>用法：<br>① 先「全量抓取」。<br>② 点这里：只查不改。先查每件有没有第 2 张图（2000 件约 10~20 分钟），再给每件找「标题像 + 主图同一张 + 有 2 张以上」的商品当来源（出品中 / 停止中 / 已售出都可以）。<br>③ 你一件件核对，右边可以换来源，对的勾上，点「执行已勾选的」。<br>④ 每件：用来源的图片重新出品（<b>标题、价格用原来那件的</b>），成功后才删掉只有 1 张图的那件；来源商品不动。<br>「没找到来源」的单独列出，可能本来就只拍了 1 张，需要手动处理。'],
+      ['修复记录（核对说明）', '#06c', () => openFixHistory(),
+        '用途：5.57 及以前的「找出只有 1 张图的商品」有个错误：<b>说明、状态、配送用的是来源商品的</b>（只有标题和价格是自己的），颜色、厚度可能对不上。这里列出那批商品，方便你逐件核对改说明。<br>用法：在面板右边日志里，从「开始修复 N 件」往后全部复制，粘贴到这里的框里，点「整理」。会列出：新商品的标题（=原来的标题）、当时用的来源（标题、ID，点开看来源的说明）。你按标题找到新商品，对照改说明。<br>5.58 以后只借图片，不会再有这个问题。'],
       ['检查再出品图片', '#f60', () => $('mp-fix').click(),
         '用途：批量再出品后，新商品的图片比原来少（比如只剩 1 张）时用来修复。<br>用法：<br>① 先抓取（抓取时间要比出问题的那次再出品晚）。<br>② 点这里：只查不改，找出「标题一样、新的图少了」的新旧对，列成对照表。<br>③ 你一对对核对（点标题看商品），对的勾上，点「执行已勾选的」。<br>④ 每一对：先用旧的（停止中、图片齐的）重新出品一件，<b>成功后</b>才删掉图少的那件；失败就不删。<br>建议第一次只勾 1 对试。底部「诊断」能看到每一对没配上的原因。'],
     ]);
