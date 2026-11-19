@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.53
+// @version      5.54
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -20,6 +20,7 @@
 // @connect      static.mercdn.net
 // @connect      auctions.c.yimg.jp
 // @connect      yimg.jp
+// @connect      paypayfleamarket.yahoo.co.jp
 // @grant        window.close
 // @run-at       document-idle
 // ==/UserScript==
@@ -1616,6 +1617,7 @@
         <button id="mp-delsold" style="${bt('#555', '#fff')}">删除已售出</button>
         <span style="flex:1"></span>
         <span id="mp-q" style="color:#06c"></span>
+        <span title="批量再出品、修复等每件之间等多久（随机取这个范围）。太短容易被当成异常操作，建议不低于 10 秒" style="font-size:14px">间隔 <input id="mp-g1" type="number" min="5" style="width:52px;${ip}">~<input id="mp-g2" type="number" min="5" style="width:52px;${ip}"> 秒</span>
         <button id="mp-qstop" style="${bt()}">暂停队列</button>
         <button id="mp-qgo" style="${bt()}">继续队列</button>
       </div>
@@ -1956,6 +1958,30 @@
         found.sort((a, b) => cntCache[b.id] - cntCache[a.id] || ord[a.status] - ord[b.status]);
         rows.push({ p, found });
       }
+      // 煤炉里没找到的：去 Yahoo!フリマ 的商品里找（需要先在 フリマ 面板抓取过）
+      const fitems = GM_getValue('mbr_fitems', { items: [] }).items || [];
+      const fCnt = {};
+      const fleaCount = id => new Promise(res => {
+        GM_xmlhttpRequest({ method: 'GET', url: 'https://paypayfleamarket.yahoo.co.jp/item/' + id, timeout: 30000,
+          onload: r => { try { const m = r.responseText.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/); const src = m && readSrcFlea(JSON.parse(m[1])); res(src ? src.images.length : null); } catch (e) { res(null); } },
+          onerror: () => res(null), ontimeout: () => res(null) });
+      });
+      const noSrc = rows.filter(x => !x.found.length);
+      for (let i = 0; i < noSrc.length && fitems.length; i++) {
+        if (stop) return;
+        const x = noSrc[i];
+        $s('sg-st').textContent = `去 フリマ 找来源 ${i + 1}/${noSrc.length}…`;
+        const pb = bg(x.p), ph = await getH(x.p);
+        const cand = fitems.filter(r => colorOk(colorsOf(baseNorm(r.title)), colorsOf(baseNorm(x.p.title))) && jacc(pb, bigrams(sigOf(r.title))) >= 0.5).slice(0, 15);
+        for (const c of cand) {
+          const ch = await getH({ id: 'f:' + c.id, thumb: c.thumb });
+          if (!ph || !ch || hamming(ph, ch) > 6) continue;
+          if (!(c.id in fCnt)) fCnt[c.id] = await fleaCount(c.id);
+          if (fCnt[c.id] >= 2) x.found.push({ id: c.id, title: c.title, status: { OPEN: 'public', CLOSE: 'stopped', SOLD: 'sold' }[c.status], thumb: c.thumb, flea: true });
+        }
+        x.found.sort((a, b) => fCnt[b.id] - fCnt[a.id]);
+      }
+      for (const id in fCnt) cntCache['f:' + id] = fCnt[id];
       GM_setValue(HKEY, hashes);
       const ok = rows.filter(x => x.found.length), none = rows.filter(x => !x.found.length);
       $s('sg-st').textContent = `出品中 ${pub.length} 件里只有 1 张图的：${singles.length} 件｜找到来源 ${ok.length}｜没找到 ${none.length}${unknown ? `｜查不准 ${unknown} 件（已排除）` : ''}`;
@@ -1967,9 +1993,10 @@
         ${ok.map((x, i) => `<tr style="border-bottom:1px solid #eee;vertical-align:top"><td><input type="checkbox" class="sg-c" data-i="${i}"></td>
           <td style="padding:4px"><img src="${thumbOf(x.p)}" style="width:48px;height:48px;object-fit:cover"></td>
           <td style="padding:4px"><a href="/item/${x.p.id}" target="_blank" style="color:#222">${esc(x.p.title)}</a><br><span style="color:#888">${x.p.id}・¥${(x.p.price || 0).toLocaleString()}</span></td>
-          <td style="padding:4px">${x.found.slice(0, 5).map((c, k) => `<label style="display:flex;gap:6px;align-items:center;margin-bottom:3px"><input type="radio" name="sg-r${i}" value="${c.id}" ${k === 0 ? 'checked' : ''}>
-            <img src="${thumbOf(c)}" style="width:36px;height:36px;object-fit:cover"><b>${cntCache[c.id]} 张</b>・${ST[c.status]}・<a href="/item/${c.id}" target="_blank" style="color:#222">${esc(c.title)}</a></label>`).join('')}</td></tr>`).join('')}</table>` : ''}
-        ${none.length ? `<h3 style="margin:14px 0 6px">没找到来源（${none.length}）：可能本来就只拍了 1 张，或者同一种商品都没有多张图的，需要你手动处理</h3>`
+          <td style="padding:4px">${x.found.slice(0, 5).map((c, k) => `<label style="display:flex;gap:6px;align-items:center;margin-bottom:3px"><input type="radio" name="sg-r${i}" value="${c.flea ? 'f:' + c.id : c.id}" ${k === 0 ? 'checked' : ''}>
+            <img src="${c.flea ? c.thumb : thumbOf(c)}" style="width:36px;height:36px;object-fit:cover"><b>${c.flea ? cntCache['f:' + c.id] : cntCache[c.id]} 张</b>・${c.flea ? '<b style="color:#f03">フリマ</b>' : '煤炉'}・${ST[c.status] || ''}・<a href="${c.flea ? 'https://paypayfleamarket.yahoo.co.jp/item/' + c.id : '/item/' + c.id}" target="_blank" style="color:#222">${esc(c.title)}</a></label>`).join('')}</td></tr>`).join('')}</table>` : ''}
+        ${!fitems.length ? '<div style="color:#c60;margin-top:8px">提示：还没抓取过 Yahoo!フリマ 的商品，所以没去 フリマ 找来源。先去 フリマ「出品した商品」页面用面板「抓取」一次，再回来点这个功能。</div>' : ''}
+        ${none.length ? `<h3 style="margin:14px 0 6px">没找到来源（${none.length}）：煤炉和 フリマ 都没找到，可能本来就只拍了 1 张，需要你手动处理</h3>`
           + none.map(x => `<div><a href="/item/${x.p.id}" target="_blank">${esc(x.p.title)}</a>（${x.p.id}）</div>`).join('') : ''}`;
       const upd = () => { const n = W.querySelectorAll('.sg-c:checked').length; $s('sg-go').disabled = !n; $s('sg-go').textContent = `执行已勾选的（${n} 件）`; };
       W.addEventListener('change', upd); upd();
@@ -2007,6 +2034,7 @@
     setInterval(() => { if (busy) GM_setValue('mbr_qhb', Date.now()); }, 15000);
     // 关掉这个标签页 = 放弃这次队列，下次回来重新设置
     window.addEventListener('pagehide', () => { if (busy) GM_setValue(QUEUE, null); });
+    const qgap = () => { const g = GM_getValue('mbr_qgap', { min: 10, max: 10 }); return rand(g.min, g.max) * 1000; };
     // 派一件后台任务并等结果
     async function runJob(op, id, phase, url, active, limitSec, extra = {}) {
       const token = Math.random().toString(36).slice(2);
@@ -2036,7 +2064,15 @@
           if (q.op === 'fix1') {
             const J = q.jobs[id];
             log(`${id}：用 ${J.src} 的图片重新出品…`);
-            const rA = await runJob('relist', J.src, 'clone', '/item/' + J.src, true, 240, { noStop: true, override: { title: J.title, price: J.price } });
+            let rA;
+            if (/^f:/.test(J.src)) {   // 来源是 Yahoo!フリマ：读那件商品，直接去煤炉出品页填
+              const fid = J.src.slice(2);
+              const src = await new Promise(res => GM_xmlhttpRequest({ method: 'GET', url: 'https://paypayfleamarket.yahoo.co.jp/item/' + fid, timeout: 30000,
+                onload: r => { try { const m = r.responseText.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/); res(m && readSrcFlea(JSON.parse(m[1]))); } catch (e) { res(null); } },
+                onerror: () => res(null), ontimeout: () => res(null) }));
+              if (!src || src.images.length < 2) rA = { phase: 'error', msg: '读不到 フリマ 商品的图片' };
+              else { src.raw = J.title; src.price = J.price; rA = await runJob('relist', J.src, 'filling', '/sell/create', true, 240, { noStop: true, ts: Date.now(), src }); }
+            } else rA = await runJob('relist', J.src, 'clone', '/item/' + J.src, true, 240, { noStop: true, override: { title: J.title, price: J.price } });
             let ok = false, msg;
             if (rA?.phase === 'done') {
               const rB = await runJob('stop-del', id, 'run', '/sell/edit/' + id, true, 90);
@@ -2047,7 +2083,7 @@
             if (!getQ()) break;
             const q2 = getQ();
             setQ({ ...q2, i: q2.i + 1, ok: q2.ok + (ok ? 1 : 0), ng: q2.ng + (ok ? 0 : 1) });
-            if (q2.i + 1 < q2.ids.length) await sleep(rand(BATCH_GAP_MIN, BATCH_GAP_MAX) * 1000);
+            if (q2.i + 1 < q2.ids.length) await sleep(qgap());
             continue;
           }
           if (q.op === 'fix') {
@@ -2065,7 +2101,7 @@
             if (!getQ()) break;
             const q2 = getQ();
             setQ({ ...q2, i: q2.i + 1, ok: q2.ok + (ok ? 1 : 0), ng: q2.ng + (ok ? 0 : 1) });
-            if (q2.i + 1 < q2.ids.length) await sleep(rand(BATCH_GAP_MIN, BATCH_GAP_MAX) * 1000);
+            if (q2.i + 1 < q2.ids.length) await sleep(qgap());
             continue;
           }
           const token = Math.random().toString(36).slice(2);
@@ -2116,12 +2152,15 @@
             break;
           }
           render();
-          await sleep(rand(GAP_MIN, GAP_MAX) * 1000);
+          await sleep(q.op === 'relist' ? qgap() : rand(GAP_MIN, GAP_MAX) * 1000);
         }
       } finally { busy = false; showQ(); render(); }
     }
 
     $('mp-fix').onclick = () => openFixDialog();
+    { const g = GM_getValue('mbr_qgap', { min: 10, max: 10 }); $('mp-g1').value = g.min; $('mp-g2').value = g.max;
+      const save = () => { let a = Math.max(5, +$('mp-g1').value || 10), b = Math.max(a, +$('mp-g2').value || a); $('mp-g1').value = a; $('mp-g2').value = b; GM_setValue('mbr_qgap', { min: a, max: b }); };
+      $('mp-g1').onchange = save; $('mp-g2').onchange = save; }
     $('mp-special').onclick = () => specialMenu([
       ['销售分析', '#7a3', () => $('mp-ana').click(),
         '用途：看哪些商品卖得好、断货了、滞销、有人点赞没人买。<br>用法：先点「全量抓取」（要包含已售出），再点这里。第一次要识别主图，会等几分钟，之后很快。<br>4 个标签：畅销榜｜断货提醒（N 个月内卖过、现在没在卖）｜滞销｜有人看没人买。每个都能导出 CSV。点一行展开看每一件。'],
