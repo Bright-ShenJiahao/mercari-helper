@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.61
+// @version      5.62
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -1929,24 +1929,29 @@
         const d = await readDesc(r.id);
         done++;
         W.querySelector('#dc-st').textContent = `读取说明 ${done}/${list.length}…（只读不改）｜有问题 ${bad.length} 件`;
-        if (d == null) { bad.push({ r, why: ['说明读不出来，请手动看'] }); return; }
+        if (d == null) { bad.push({ r, why: ['说明读不出来（页面没打开或网络慢）。→ 点「改说明」手动看一下'] }); return; }
         const h = head(d), first = N(d).split('\n').find(x => x.trim()) || '';
+        // 标题是对的（修复时标题用的是原商品自己的），所以建议都是「把说明改成跟标题一样」
         const why = [];
         const tc = colorsOf(baseNorm(r.title)), dc = colorsOf(baseNorm(h));
-        if (tc && dc && tc !== dc) why.push(`颜色：标题「${tc}」/ 说明「${dc}」`);
+        if (tc && dc && tc !== dc) why.push(`颜色不一样：标题是「${tc}」，说明里是「${dc}」。→ 把说明里的颜色改成「${tc}」，并看一下图片颜色对不对`);
         const tt = thick(r.title), dt = thick(h);
-        if (tt && dt && tt !== dt) why.push(`厚度：标题「${tt}」/ 说明「${dt}」`);
+        if (tt && dt && tt !== dt) why.push(`厚度不一样：标题是「${tt}」，说明里是「${dt}」。→ 把说明里的厚度改成「${tt}」`);
         const ts = spongeOf(r.title), ds = spongeOf(h);
-        if (ts && ds && ts !== ds) why.push(`海绵：标题「${ts === 'ox' ? 'OX（无海绵）' : '带海绵'}」/ 说明「${ds === 'ox' ? 'OX（无海绵）' : '带海绵'}」`);
+        if (ts && ds && ts !== ds) why.push(ts === 'ox'
+          ? '海绵对不上：标题是 OX（无海绵），说明写的是带海绵（有海绵厚度）。→ 把说明改成 OX（スポンジなし），删掉海绵厚度；图片如果是带海绵的也要换'
+          : '海绵对不上：标题是带海绵，说明写的是 OX（无海绵）。→ 把说明改成带海绵，写上海绵厚度；图片也要确认');
         const tco = code(r.title), dco = code(first);
-        if (tco && dco && tco !== dco) why.push(`尾号：标题「${tco}」/ 说明第一行「${dco}」`);
+        if (tco && dco && tco !== dco) why.push(`尾号不一样：标题末尾是「${tco}」，说明第一行末尾是「${dco}」。→ 把说明第一行末尾改成「${tco}」`);
         if (why.length) bad.push({ r, why });
       };
       for (let i = 0; i < list.length; i += 3) { if (stop) return; await Promise.all(list.slice(i, i + 3).map(checkOne)); await sleep(300); }
       const esc = v => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
       W.querySelector('#dc-st').textContent = `${hrs ? `最近 ${hrs} 小时出品的` : '全部出品中的'} ${list.length} 件，有问题 ${bad.length} 件`;
-      W.querySelector('#dc-out').innerHTML = `<div style="color:#666;margin-bottom:6px">只比对说明的前半部分（后面的关键词列表不看）。说明里没写颜色 / 厚度 / 尾号的不算问题。点「改说明」直接打开编辑页。</div>
-        <table style="width:100%;border-collapse:collapse"><tr style="background:#f0f0f0"><th style="text-align:left">标题</th><th style="text-align:left">对不上的地方</th><th></th></tr>
+      W.querySelector('#dc-out').innerHTML = `<div style="color:#666;margin-bottom:6px;line-height:1.7">说明：以<b>标题为准</b>（修复时标题用的是原商品自己的，说明和图片是来源商品的）。<br>
+        只比对说明的前半部分（后面的关键词列表不看）；说明里没写颜色 / 厚度 / 海绵 / 尾号的不算问题。<br>
+        改法：点「改说明」打开编辑页 → 按红字提示改说明（有需要就删掉不对的图片）→ 点页面最下面的「変更する」保存。</div>
+        <table style="width:100%;border-collapse:collapse"><tr style="background:#f0f0f0"><th style="text-align:left">标题</th><th style="text-align:left">哪里不对 → 怎么改</th><th></th></tr>
         ${bad.map(x => `<tr style="border-bottom:1px solid #eee"><td style="padding:4px">${esc(x.r.title)}<br><span style="color:#888">${x.r.id}</span></td><td style="padding:4px;color:#c00">${x.why.map(esc).join('<br>')}</td>
           <td><a href="/sell/edit/${x.r.id}" target="_blank" style="padding:4px 10px;border:1px solid #06c;border-radius:6px;color:#06c;text-decoration:none">改说明</a></td></tr>`).join('')}</table>`;
     }
