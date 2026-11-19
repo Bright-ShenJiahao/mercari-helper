@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.51
+// @version      5.52
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -1822,6 +1822,8 @@
       W.style.cssText = 'position:fixed;inset:24px;z-index:2147483647;background:#fff;border-radius:10px;box-shadow:0 4px 30px rgba(0,0,0,.45);display:flex;flex-direction:column;font-size:14px;color:#222';
       W.innerHTML = `<div style="display:flex;gap:10px;align-items:center;padding:10px 12px;border-bottom:1px solid #ddd">
           <b style="font-size:17px">检查再出品图片</b><span id="fx-st" style="color:#666"></span><span style="flex:1"></span>
+          <button id="fx-all" style="padding:6px 14px;border:1px solid #aaa;border-radius:6px;background:#fff;cursor:pointer">全选</button>
+          <button id="fx-none" style="padding:6px 14px;border:1px solid #aaa;border-radius:6px;background:#fff;cursor:pointer">全不选</button>
           <button id="fx-go" disabled style="padding:6px 14px;border:none;border-radius:6px;background:#e33;color:#fff;cursor:pointer">执行已勾选的</button>
           <button id="fx-close" style="padding:6px 14px;border:1px solid #aaa;border-radius:6px;background:#fff;cursor:pointer">关闭</button></div>
         <div id="fx-body" style="flex:1;overflow:auto;padding:8px 12px"></div>`;
@@ -1885,6 +1887,8 @@
           + manual.map(x => `<div>新的 <a href="/item/${x.p.id}" target="_blank">${esc(x.p.title)}</a>（${cnt[x.p.id]} 张）↔ 可能的旧的：${x.s.map(s => `<a href="/item/${s.id}" target="_blank">${s.id}</a>（${cnt[s.id]} 张）`).join('、')}</div>`).join('') : '');
       const upd = () => { const n = W.querySelectorAll('.fx-c:checked').length; $f('fx-go').disabled = !n; $f('fx-go').textContent = `执行已勾选的（${n} 对）`; };
       W.addEventListener('change', upd); upd();
+      $f('fx-all').onclick = () => { W.querySelectorAll('.fx-c').forEach(c => { c.checked = true; }); upd(); };
+      $f('fx-none').onclick = () => { W.querySelectorAll('.fx-c').forEach(c => { c.checked = false; }); upd(); };
       $f('fx-go').onclick = () => {
         const sel = [...W.querySelectorAll('.fx-c:checked')].map(c => [c.dataset.s, c.dataset.p]);
         if (!sel.length) return;
