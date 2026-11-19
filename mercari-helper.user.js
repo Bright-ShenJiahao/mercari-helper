@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.44
+// @version      5.45
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -154,6 +154,9 @@
         const ok = await waitFor(() => document.querySelector('[data-testid="description"]') && document.querySelector('h1'), 30000);
         if (!ok) return finishJob(false, '商品页没加载出来');
         await sleep(1500);
+        // 缩略图比说明晚出来：等缩略图出现（最多 10 秒），不然只数到 1 张
+        await waitFor(() => document.querySelector('[data-testid^="imageThumbnail-"]'), 10000);
+        await sleep(800);
         const src = readSrc();
         setJob({ ...getJob(), phase: 'filling', ts: Date.now(), src });
         trace('商品页：读好商品，打开出品页');
@@ -357,10 +360,17 @@
   }
   async function downloadImages(src, say) {
     const files = [];
-    for (let i = 0; i < src.images.length; i++) {
-      const b = await fetchImg(src.images[i]);
-      if (b) files.push(new File([b], `photo${i + 1}.jpg`, { type: b.type || 'image/jpeg' }));
-      say(`下载图片 ${files.length}/${src.images.length}…`);
+    const urls = [...src.images];
+    // 煤炉的图片按 _1 _2 _3… 编号：不管页面上数到几张，都继续往后试，直到取不到为止（最多 20 张）
+    const m = /^(https:\/\/static\.mercdn\.net\/item\/detail\/orig\/photos\/m\d+_)(\d+)\.jpg$/.exec(urls[urls.length - 1] || '');
+    for (let i = 0; i < 20; i++) {
+      let url = urls[i];
+      if (!url && m) url = `${m[1]}${i + 1}.jpg`;
+      if (!url) break;
+      const b = await fetchImg(url);
+      if (!b || !/^image\//.test(b.type || 'image/jpeg') || b.size < 2000) { if (i >= src.images.length) break; else continue; }
+      files.push(new File([b], `photo${i + 1}.jpg`, { type: b.type || 'image/jpeg' }));
+      say(`下载图片 ${files.length}…`);
     }
     return files;
   }
