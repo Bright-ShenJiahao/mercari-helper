@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.55
+// @version      5.56
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -1915,12 +1915,18 @@
       $s('sg-close').onclick = () => { stop = true; W.remove(); };
       // 1. 每件出品中的商品只查「第 2 张图在不在」
       const pub = items.filter(r => r.status === 'public');
-      const has2 = {};
+      const has2 = {}, gone = [];
       let done = 0;
       const one = async r => {
         let st = 0;
         for (let k = 0; k < 3; k++) { st = (await fetchImgS(`https://static.mercdn.net/item/detail/webp/photos/${r.id}_2.jpg`)).status; if (st) break; await sleep(1000); }
         has2[r.id] = st === 200 ? true : (st === 404 || st === 403) ? false : null;
+        // 第 2 张没有时，再确认第 1 张还在：已经删掉的商品图片全没了，不能当成「只有 1 张」
+        if (has2[r.id] === false) {
+          let s1 = 0;
+          for (let k = 0; k < 3; k++) { s1 = (await fetchImgS(`https://static.mercdn.net/item/detail/webp/photos/${r.id}_1.jpg`)).status; if (s1) break; await sleep(1000); }
+          if (s1 !== 200) { has2[r.id] = null; gone.push(r.id); }
+        }
         done++; if (done % 10 === 0) $s('sg-st').textContent = `查第 2 张图 ${done}/${pub.length}…（只查不改）`;
       };
       for (let i = 0; i < pub.length; i += 4) { if (stop) return; await Promise.all(pub.slice(i, i + 4).map(one)); }
@@ -1976,7 +1982,7 @@
       for (const id in fCnt) cntCache['f:' + id] = fCnt[id];
       GM_setValue(HKEY, hashes);
       const ok = rows.filter(x => x.found.length), none = rows.filter(x => !x.found.length);
-      $s('sg-st').textContent = `出品中 ${pub.length} 件里只有 1 张图的：${singles.length} 件｜找到来源 ${ok.length}｜没找到 ${none.length}${unknown ? `｜查不准 ${unknown} 件（已排除）` : ''}`;
+      $s('sg-st').textContent = `出品中 ${pub.length} 件里只有 1 张图的：${singles.length} 件｜找到来源 ${ok.length}｜没找到 ${none.length}${gone.length ? `｜已经不存在 ${gone.length} 件（数据旧了，已排除）` : ''}${unknown - gone.length > 0 ? `｜查不准 ${unknown - gone.length} 件（已排除）` : ''}`;
       const esc = v => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
       const ST = { public: '出品中', stopped: '停止中', sold: '已售出' };
       $s('sg-body').innerHTML = `<div style="color:#666;line-height:1.7">请一件件核对：左边是只有 1 张图的商品；右边选一个「同一种、图片齐全」的来源（默认选图最多的）。对的勾上，点「执行已勾选的」。<br>
@@ -2055,6 +2061,10 @@
           const id = q.ids[q.i];
           if (q.op === 'fix1') {
             const J = q.jobs[id];
+            if ((await fetchImgS(`https://static.mercdn.net/item/detail/webp/photos/${id}_1.jpg`)).status === 404) {
+              log(`${id}：这件已经不存在（已删除），跳过，不重新出品`);
+              const q3 = getQ(); setQ({ ...q3, i: q3.i + 1, ng: q3.ng + 1 }); continue;
+            }
             log(`${id}：用 ${J.src} 的图片重新出品…`);
             let rA;
             if (/^f:/.test(J.src)) {   // 来源是 Yahoo!フリマ：读那件商品，直接去煤炉出品页填
