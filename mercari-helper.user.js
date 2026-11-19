@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.58
+// @version      5.59
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -1896,6 +1896,57 @@
         runQueue();
       };
     }
+    // ============ 核对说明：标题里的颜色 / 厚度 / 尾号，和说明（前半部分、第一行）对不对得上 ============
+    async function openDescCheck() {
+      const hrs = +prompt('核对最近几小时内出品的商品？（修复那批大约从凌晨 2:38 开始）', '4');
+      if (!hrs) return;
+      const ageH = u => { const s = String(u || '').normalize('NFKC'); const m = s.match(/(\d+)\s*(分|時間|日)/); return !m ? 1e9 : m[2] === '分' ? +m[1] / 60 : m[2] === '時間' ? +m[1] : +m[1] * 24; };
+      const list = data().items.filter(r => r.status === 'public' && ageH(r.upd) <= hrs);
+      if (!list.length) return alert('没找到这段时间内出品的商品（先「快速刷新」一次）');
+      const W = document.createElement('div');
+      W.style.cssText = 'position:fixed;inset:24px;z-index:2147483647;background:#fff;border-radius:10px;box-shadow:0 4px 30px rgba(0,0,0,.45);display:flex;flex-direction:column;font-size:14px;color:#222';
+      W.innerHTML = `<div style="display:flex;gap:10px;align-items:center;padding:10px 12px;border-bottom:1px solid #ddd"><b style="font-size:17px">核对说明</b><span id="dc-st" style="color:#666"></span><span style="flex:1"></span><button id="dc-x" style="padding:5px 12px">关闭</button></div>
+        <div id="dc-out" style="flex:1;overflow:auto;padding:8px 12px"></div>`;
+      document.body.appendChild(W);
+      let stop = false;
+      W.querySelector('#dc-x').onclick = () => { stop = true; W.remove(); };
+      const N = s => String(s || '').normalize('NFKC');
+      const thick = s => [...new Set([...N(s).matchAll(/(?<![\d.])([0-2]\.\d)\s*(?:mm)?(?![\d.])|(?<![\d.])([12])\s*mm/gi)].map(m => (m[1] || m[2] + '.0')))].sort().join(',');
+      const code = s => (N(s).trim().match(/(?:^|\s)([a-z]{1,3}\s?\d{1,3})$/i) || [])[1]?.replace(/\s/g, '').toUpperCase() || '';
+      // 说明只看前半部分（后面常有一大串关键词，会混进别的颜色）
+      const head = d => N(d).split(/\n\s*-{3,}|\n\s*#|\n\s*【キーワード/)[0].split('\n').slice(0, 15).join('\n');
+      const readDesc = id => new Promise(res => {
+        const f = document.createElement('iframe');
+        f.style.cssText = 'position:fixed;left:-5000px;top:0;width:1000px;height:800px';
+        f.src = '/sell/edit/' + id + '?mbrcheck=1';
+        document.body.appendChild(f);
+        f.onload = async () => { const t = await waitFor(() => f.contentDocument?.querySelector('textarea[name="description"]')?.value, 20000); res(t || null); f.remove(); };
+      });
+      const bad = [];
+      for (let i = 0; i < list.length; i++) {
+        if (stop) return;
+        const r = list[i];
+        W.querySelector('#dc-st').textContent = `读取说明 ${i + 1}/${list.length}…（只读不改）｜有问题 ${bad.length} 件`;
+        const d = await readDesc(r.id);
+        if (d == null) { bad.push({ r, why: ['说明读不出来，请手动看'] }); continue; }
+        const h = head(d), first = N(d).split('\n').find(x => x.trim()) || '';
+        const why = [];
+        const tc = colorsOf(baseNorm(r.title)), dc = colorsOf(baseNorm(h));
+        if (tc && dc && tc !== dc) why.push(`颜色：标题「${tc}」/ 说明「${dc}」`);
+        const tt = thick(r.title), dt = thick(h);
+        if (tt && dt && tt !== dt) why.push(`厚度：标题「${tt}」/ 说明「${dt}」`);
+        const tco = code(r.title), dco = code(first);
+        if (tco && dco && tco !== dco) why.push(`尾号：标题「${tco}」/ 说明第一行「${dco}」`);
+        if (why.length) bad.push({ r, why });
+        await sleep(400);
+      }
+      const esc = v => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
+      W.querySelector('#dc-st').textContent = `最近 ${hrs} 小时出品的 ${list.length} 件，有问题 ${bad.length} 件`;
+      W.querySelector('#dc-out').innerHTML = `<div style="color:#666;margin-bottom:6px">只比对说明的前半部分（后面的关键词列表不看）。说明里没写颜色 / 厚度 / 尾号的不算问题。点「改说明」直接打开编辑页。</div>
+        <table style="width:100%;border-collapse:collapse"><tr style="background:#f0f0f0"><th style="text-align:left">标题</th><th style="text-align:left">对不上的地方</th><th></th></tr>
+        ${bad.map(x => `<tr style="border-bottom:1px solid #eee"><td style="padding:4px">${esc(x.r.title)}<br><span style="color:#888">${x.r.id}</span></td><td style="padding:4px;color:#c00">${x.why.map(esc).join('<br>')}</td>
+          <td><a href="/sell/edit/${x.r.id}" target="_blank" style="padding:4px 10px;border:1px solid #06c;border-radius:6px;color:#06c;text-decoration:none">改说明</a></td></tr>`).join('')}</table>`;
+    }
     function openFixHistory() {
       const W = document.createElement('div');
       W.style.cssText = 'position:fixed;inset:24px;z-index:2147483647;background:#fff;border-radius:10px;box-shadow:0 4px 30px rgba(0,0,0,.45);display:flex;flex-direction:column;font-size:14px;color:#222;padding:12px';
@@ -2211,6 +2262,8 @@
         '用途：把抓到的全部商品（标题、状态、价格、浏览、赞、最后更新、ID）下载成 Excel 能打开的 CSV，可以发给别的 AI 分析。<br>用法：先「全量抓取」，再点这里。'],
       ['找出只有 1 张图的商品', '#c33', () => openSingleDialog(),
         '用途：找出所有「出品中、但只有 1 张图」的商品（包括旧商品已经删掉、上面那个功能配不上对的）。<br>用法：<br>① 先「全量抓取」。<br>② 点这里：只查不改。先查每件有没有第 2 张图（2000 件约 10~20 分钟），再给每件找「标题像 + 主图同一张 + 有 2 张以上」的商品当来源（出品中 / 停止中 / 已售出都可以）。<br>③ 你一件件核对，右边可以换来源，对的勾上，点「执行已勾选的」。<br>④ 每件：用来源的图片重新出品（<b>标题、价格用原来那件的</b>），成功后才删掉只有 1 张图的那件；来源商品不动。<br>「没找到来源」的单独列出，可能本来就只拍了 1 张，需要手动处理。'],
+      ['核对说明（颜色 / 厚度 / 尾号）', '#06c', () => openDescCheck(),
+        '用途：找出「标题和说明对不上」的商品——颜色、厚度不一样，或者标题尾号和说明第一行的尾号不一样。<br>用法：先「快速刷新」，再点这里，输入要核对最近几小时内出品的（修复那批大约从凌晨 2:38 开始，填 4 左右）。只读不改，每件在后台打开编辑页读说明，100 件约 5~10 分钟。<br>结果只列有问题的，点「改说明」打开编辑页手动改。'],
       ['修复记录（核对说明）', '#06c', () => openFixHistory(),
         '用途：5.57 及以前的「找出只有 1 张图的商品」有个错误：<b>说明、状态、配送用的是来源商品的</b>（只有标题和价格是自己的），颜色、厚度可能对不上。这里列出那批商品，方便你逐件核对改说明。<br>用法：在面板右边日志里，从「开始修复 N 件」往后全部复制，粘贴到这里的框里，点「整理」。会列出：新商品的标题（=原来的标题）、当时用的来源（标题、ID，点开看来源的说明）。你按标题找到新商品，对照改说明。<br>5.58 以后只借图片，不会再有这个问题。'],
       ['检查再出品图片', '#f60', () => $('mp-fix').click(),
