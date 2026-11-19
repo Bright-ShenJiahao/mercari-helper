@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.47
+// @version      5.48
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -1802,7 +1802,8 @@
       let n = 0;
       for (let i = 1; i <= 20; i++) {
         let st = 0;
-        for (let k = 0; k < 3; k++) { st = await headStatus(`https://static.mercdn.net/item/detail/orig/photos/${id}_${i}.jpg`); if (st) break; await sleep(1000); }
+        // 用 webp 版地址试（HEAD 请求不可靠；小缩略图只有第 1 张）
+        for (let k = 0; k < 3; k++) { st = (await fetchImgS(`https://static.mercdn.net/item/detail/webp/photos/${id}_${i}.jpg`)).status; if (st) break; await sleep(1000); }
         if (st === 200) n = i; else if (st === 404 || st === 403) break; else return null;
       }
       return n;
