@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.52
+// @version      5.53
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -178,6 +178,7 @@
         await waitFor(() => document.querySelector('[data-testid^="imageThumbnail-"]'), 10000);
         await sleep(800);
         const src = readSrc();
+        if (j.override) { if (j.override.title) src.raw = j.override.title; if (j.override.price) src.price = j.override.price; }
         setJob({ ...getJob(), phase: 'filling', ts: Date.now(), src });
         trace('商品页：读好商品，打开出品页');
         GM_openInTab(location.origin + '/sell/create', { active: true, insert: true });
@@ -1120,7 +1121,7 @@
       await sleep(1000);
       if (!/\/sell\/create/.test(path())) {
         if (mt) taskDone('煤炉出品成功');
-        else { trace('出品页：出品成功'); setJob({ ...getJob(), phase: 'stop' }); }
+        else { trace('出品页：出品成功'); const jj = getJob(); if (jj?.noStop) finishJob(true, '已出品（来源商品不动）'); else setJob({ ...jj, phase: 'stop' }); }
         toast(`「${title}」出品成功`, '#090');
         closeSoon();
         return;
@@ -1900,6 +1901,91 @@
         runQueue();
       };
     }
+    // ============ 找出所有「只有 1 张图」的出品中商品，找同一种、图片齐全的商品当来源 ============
+    async function openSingleDialog() {
+      const items = data().items;
+      if (!items.some(r => r.status === 'public')) return alert('先「全量抓取」一次');
+      const W = document.createElement('div');
+      W.id = 'mbr-single';
+      W.style.cssText = 'position:fixed;inset:24px;z-index:2147483647;background:#fff;border-radius:10px;box-shadow:0 4px 30px rgba(0,0,0,.45);display:flex;flex-direction:column;font-size:14px;color:#222';
+      const b2 = 'padding:6px 14px;border:1px solid #aaa;border-radius:6px;background:#fff;cursor:pointer';
+      W.innerHTML = `<div style="display:flex;gap:10px;align-items:center;padding:10px 12px;border-bottom:1px solid #ddd">
+          <b style="font-size:17px">找出只有 1 张图的商品</b><span id="sg-st" style="color:#666"></span><span style="flex:1"></span>
+          <button id="sg-all" style="${b2}">全选</button><button id="sg-none" style="${b2}">全不选</button>
+          <button id="sg-go" disabled style="padding:6px 14px;border:none;border-radius:6px;background:#e33;color:#fff;cursor:pointer">执行已勾选的</button>
+          <button id="sg-close" style="${b2}">关闭</button></div>
+        <div id="sg-body" style="flex:1;overflow:auto;padding:8px 12px"></div>`;
+      document.body.appendChild(W);
+      const $s = id => W.querySelector('#' + id);
+      let stop = false;
+      $s('sg-close').onclick = () => { stop = true; W.remove(); };
+      // 1. 每件出品中的商品只查「第 2 张图在不在」
+      const pub = items.filter(r => r.status === 'public');
+      const has2 = {};
+      let done = 0;
+      const one = async r => {
+        let st = 0;
+        for (let k = 0; k < 3; k++) { st = (await fetchImgS(`https://static.mercdn.net/item/detail/webp/photos/${r.id}_2.jpg`)).status; if (st) break; await sleep(1000); }
+        has2[r.id] = st === 200 ? true : (st === 404 || st === 403) ? false : null;
+        done++; if (done % 10 === 0) $s('sg-st').textContent = `查第 2 张图 ${done}/${pub.length}…（只查不改）`;
+      };
+      for (let i = 0; i < pub.length; i += 4) { if (stop) return; await Promise.all(pub.slice(i, i + 4).map(one)); }
+      const singles = pub.filter(r => has2[r.id] === false);
+      const unknown = pub.filter(r => has2[r.id] == null).length;
+      // 2. 给每件找来源：标题像 + 主图同一张 + 有 2 张以上
+      const hashes = GM_getValue(HKEY, {});
+      const getH = async r => { if (!hashes[r.id] && thumbOf(r)) { const h = await imgHash(thumbOf(r)); if (h) hashes[r.id] = h; } return hashes[r.id] ? [parseInt(hashes[r.id].slice(0, 8), 16), parseInt(hashes[r.id].slice(8), 16)] : null; };
+      const bgCache = {};
+      const bg = r => bgCache[r.id] || (bgCache[r.id] = bigrams(sigOf(r.title)));
+      const cntCache = {};
+      const rows = [];
+      for (let i = 0; i < singles.length; i++) {
+        if (stop) return;
+        const p = singles[i];
+        $s('sg-st').textContent = `找来源 ${i + 1}/${singles.length}…`;
+        const pb = bg(p), ph = await getH(p);
+        const cand = items.filter(r => r.id !== p.id && has2[r.id] !== false && colorOk(colorsOf(baseNorm(r.title)), colorsOf(baseNorm(p.title))) && jacc(pb, bg(r)) >= 0.5);
+        const found = [];
+        for (const c of cand.slice(0, 30)) {
+          const ch = await getH(c);
+          if (!ph || !ch || hamming(ph, ch) > 6) continue;
+          if (!(c.id in cntCache)) cntCache[c.id] = await countImgs(c.id);
+          if (cntCache[c.id] >= 2) found.push(c);
+        }
+        const ord = { stopped: 0, public: 1, sold: 2 };
+        found.sort((a, b) => cntCache[b.id] - cntCache[a.id] || ord[a.status] - ord[b.status]);
+        rows.push({ p, found });
+      }
+      GM_setValue(HKEY, hashes);
+      const ok = rows.filter(x => x.found.length), none = rows.filter(x => !x.found.length);
+      $s('sg-st').textContent = `出品中 ${pub.length} 件里只有 1 张图的：${singles.length} 件｜找到来源 ${ok.length}｜没找到 ${none.length}${unknown ? `｜查不准 ${unknown} 件（已排除）` : ''}`;
+      const esc = v => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
+      const ST = { public: '出品中', stopped: '停止中', sold: '已售出' };
+      $s('sg-body').innerHTML = `<div style="color:#666;line-height:1.7">请一件件核对：左边是只有 1 张图的商品；右边选一个「同一种、图片齐全」的来源（默认选图最多的）。对的勾上，点「执行已勾选的」。<br>
+        执行时：用来源的图片重新出品一件，<b>标题和价格用左边这件的</b>；成功后才删掉左边只有 1 张图的那件。来源商品不会被停止或改动。</div>
+        ${ok.length ? `<table style="width:100%;border-collapse:collapse;margin-top:8px"><tr style="background:#f0f0f0"><th></th><th colspan="2">只有 1 张图（会删掉）</th><th>选来源（图片齐全，只读图片）</th></tr>
+        ${ok.map((x, i) => `<tr style="border-bottom:1px solid #eee;vertical-align:top"><td><input type="checkbox" class="sg-c" data-i="${i}"></td>
+          <td style="padding:4px"><img src="${thumbOf(x.p)}" style="width:48px;height:48px;object-fit:cover"></td>
+          <td style="padding:4px"><a href="/item/${x.p.id}" target="_blank" style="color:#222">${esc(x.p.title)}</a><br><span style="color:#888">${x.p.id}・¥${(x.p.price || 0).toLocaleString()}</span></td>
+          <td style="padding:4px">${x.found.slice(0, 5).map((c, k) => `<label style="display:flex;gap:6px;align-items:center;margin-bottom:3px"><input type="radio" name="sg-r${i}" value="${c.id}" ${k === 0 ? 'checked' : ''}>
+            <img src="${thumbOf(c)}" style="width:36px;height:36px;object-fit:cover"><b>${cntCache[c.id]} 张</b>・${ST[c.status]}・<a href="/item/${c.id}" target="_blank" style="color:#222">${esc(c.title)}</a></label>`).join('')}</td></tr>`).join('')}</table>` : ''}
+        ${none.length ? `<h3 style="margin:14px 0 6px">没找到来源（${none.length}）：可能本来就只拍了 1 张，或者同一种商品都没有多张图的，需要你手动处理</h3>`
+          + none.map(x => `<div><a href="/item/${x.p.id}" target="_blank">${esc(x.p.title)}</a>（${x.p.id}）</div>`).join('') : ''}`;
+      const upd = () => { const n = W.querySelectorAll('.sg-c:checked').length; $s('sg-go').disabled = !n; $s('sg-go').textContent = `执行已勾选的（${n} 件）`; };
+      W.addEventListener('change', upd); upd();
+      $s('sg-all').onclick = () => { W.querySelectorAll('.sg-c').forEach(c => { c.checked = true; }); upd(); };
+      $s('sg-none').onclick = () => { W.querySelectorAll('.sg-c').forEach(c => { c.checked = false; }); upd(); };
+      $s('sg-go').onclick = () => {
+        const sel = [...W.querySelectorAll('.sg-c:checked')].map(c => { const x = ok[+c.dataset.i]; const src = W.querySelector(`input[name="sg-r${c.dataset.i}"]:checked`)?.value; return { src, bad: x.p.id, title: x.p.title, price: x.p.price }; }).filter(x => x.src);
+        if (!sel.length) return;
+        if (getQ()?.running) return alert('还有队列在运行，先暂停或等它结束。');
+        if (!confirm(`执行 ${sel.length} 件：\n用来源的图片重新出品（标题、价格用原来那件的），成功后删掉只有 1 张图的那件。\n来源商品不动。删除不能恢复。确定开始？`)) return;
+        setQ({ op: 'fix1', label: '修复只有 1 张图的商品', ids: sel.map(x => x.bad), jobs: Object.fromEntries(sel.map(x => [x.bad, x])), i: 0, running: true, ok: 0, ng: 0 });
+        W.remove();
+        log(`开始修复 ${sel.length} 件`);
+        runQueue();
+      };
+    }
     async function checkStatus(id) {
       const f = document.createElement('iframe');
       f.style.cssText = 'position:fixed;left:-5000px;top:0;width:1000px;height:800px';
@@ -1922,9 +2008,9 @@
     // 关掉这个标签页 = 放弃这次队列，下次回来重新设置
     window.addEventListener('pagehide', () => { if (busy) GM_setValue(QUEUE, null); });
     // 派一件后台任务并等结果
-    async function runJob(op, id, phase, url, active, limitSec) {
+    async function runJob(op, id, phase, url, active, limitSec, extra = {}) {
       const token = Math.random().toString(36).slice(2);
-      setJob({ op, id, phase, token });
+      setJob({ op, id, phase, token, ...extra });
       const tab = GM_openInTab(location.origin + url, { active, insert: true });
       for (let t = 0; t < limitSec; t++) {
         await sleep(1000);
@@ -1947,6 +2033,23 @@
             break;
           }
           const id = q.ids[q.i];
+          if (q.op === 'fix1') {
+            const J = q.jobs[id];
+            log(`${id}：用 ${J.src} 的图片重新出品…`);
+            const rA = await runJob('relist', J.src, 'clone', '/item/' + J.src, true, 240, { noStop: true, override: { title: J.title, price: J.price } });
+            let ok = false, msg;
+            if (rA?.phase === 'done') {
+              const rB = await runJob('stop-del', id, 'run', '/sell/edit/' + id, true, 90);
+              ok = rB?.phase === 'done';
+              msg = ok ? '完成：已重新出品（图片齐全），只有 1 张图的已删除' : `新的已出品，但只有 1 张图的 ${id} 没删掉（${rB?.msg || '超时'}），请手动删`;
+            } else msg = `重新出品失败（${rA?.msg || '超时'}），原来那件没动`;
+            log(`${id}：${msg}`);
+            if (!getQ()) break;
+            const q2 = getQ();
+            setQ({ ...q2, i: q2.i + 1, ok: q2.ok + (ok ? 1 : 0), ng: q2.ng + (ok ? 0 : 1) });
+            if (q2.i + 1 < q2.ids.length) await sleep(rand(BATCH_GAP_MIN, BATCH_GAP_MAX) * 1000);
+            continue;
+          }
           if (q.op === 'fix') {
             const P = q.pairs[id];
             log(`${id}：用旧的重新出品…`);
@@ -2024,6 +2127,8 @@
         '用途：看哪些商品卖得好、断货了、滞销、有人点赞没人买。<br>用法：先点「全量抓取」（要包含已售出），再点这里。第一次要识别主图，会等几分钟，之后很快。<br>4 个标签：畅销榜｜断货提醒（N 个月内卖过、现在没在卖）｜滞销｜有人看没人买。每个都能导出 CSV。点一行展开看每一件。'],
       ['导出全部商品（CSV）', '#555', () => $('mp-csv').click(),
         '用途：把抓到的全部商品（标题、状态、价格、浏览、赞、最后更新、ID）下载成 Excel 能打开的 CSV，可以发给别的 AI 分析。<br>用法：先「全量抓取」，再点这里。'],
+      ['找出只有 1 张图的商品', '#c33', () => openSingleDialog(),
+        '用途：找出所有「出品中、但只有 1 张图」的商品（包括旧商品已经删掉、上面那个功能配不上对的）。<br>用法：<br>① 先「全量抓取」。<br>② 点这里：只查不改。先查每件有没有第 2 张图（2000 件约 10~20 分钟），再给每件找「标题像 + 主图同一张 + 有 2 张以上」的商品当来源（出品中 / 停止中 / 已售出都可以）。<br>③ 你一件件核对，右边可以换来源，对的勾上，点「执行已勾选的」。<br>④ 每件：用来源的图片重新出品（<b>标题、价格用原来那件的</b>），成功后才删掉只有 1 张图的那件；来源商品不动。<br>「没找到来源」的单独列出，可能本来就只拍了 1 张，需要手动处理。'],
       ['检查再出品图片', '#f60', () => $('mp-fix').click(),
         '用途：批量再出品后，新商品的图片比原来少（比如只剩 1 张）时用来修复。<br>用法：<br>① 先抓取（抓取时间要比出问题的那次再出品晚）。<br>② 点这里：只查不改，找出「标题一样、新的图少了」的新旧对，列成对照表。<br>③ 你一对对核对（点标题看商品），对的勾上，点「执行已勾选的」。<br>④ 每一对：先用旧的（停止中、图片齐的）重新出品一件，<b>成功后</b>才删掉图少的那件；失败就不删。<br>建议第一次只勾 1 对试。底部「诊断」能看到每一对没配上的原因。'],
     ]);
