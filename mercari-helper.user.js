@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.50
+// @version      5.51
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -1588,12 +1588,11 @@
         #mbr-panel th{padding:8px;font-size:15px}
       </style>
       <div style="display:flex;gap:8px;align-items:center;padding:8px 12px;border-bottom:1px solid #ddd;flex-wrap:wrap">
-        <b style="font-size:15px">メルカリ助手</b>
+        <b style="font-size:15px">メルカリ助手<span style="color:#999;font-weight:normal;font-size:13px">${typeof GM_info !== 'undefined' ? ' v' + GM_info.script.version : ''}</span></b>
         <button id="mp-quick" style="${bt('#06c', '#fff')}">快速刷新（最近300条）</button>
         <button id="mp-scan" style="${bt()}">全量抓取（约15-20分钟）</button>
-        <button id="mp-ana" style="${bt('#7a3', '#fff')}">销售分析</button>
-        <button id="mp-csv" style="${bt()}">导出全部商品（CSV）</button>
-        <button id="mp-fix" style="${bt('#f60', '#fff')}">检查再出品图片</button>
+        <button id="mp-special" style="${bt('#7a3', '#fff')}">特殊功能 ▾</button>
+        <span style="display:none"><button id="mp-ana"></button><button id="mp-csv"></button><button id="mp-fix"></button></span>
         <span id="mp-at" style="color:#666"></span>
         <span id="mp-stale" style="display:none;background:#e00;color:#fff;font-weight:bold;padding:3px 10px;border-radius:4px"></span>
         <span style="flex:1"></span>
@@ -2016,6 +2015,14 @@
     }
 
     $('mp-fix').onclick = () => openFixDialog();
+    $('mp-special').onclick = () => specialMenu([
+      ['销售分析', '#7a3', () => $('mp-ana').click(),
+        '用途：看哪些商品卖得好、断货了、滞销、有人点赞没人买。<br>用法：先点「全量抓取」（要包含已售出），再点这里。第一次要识别主图，会等几分钟，之后很快。<br>4 个标签：畅销榜｜断货提醒（N 个月内卖过、现在没在卖）｜滞销｜有人看没人买。每个都能导出 CSV。点一行展开看每一件。'],
+      ['导出全部商品（CSV）', '#555', () => $('mp-csv').click(),
+        '用途：把抓到的全部商品（标题、状态、价格、浏览、赞、最后更新、ID）下载成 Excel 能打开的 CSV，可以发给别的 AI 分析。<br>用法：先「全量抓取」，再点这里。'],
+      ['检查再出品图片', '#f60', () => $('mp-fix').click(),
+        '用途：批量再出品后，新商品的图片比原来少（比如只剩 1 张）时用来修复。<br>用法：<br>① 先抓取（抓取时间要比出问题的那次再出品晚）。<br>② 点这里：只查不改，找出「标题一样、新的图少了」的新旧对，列成对照表。<br>③ 你一对对核对（点标题看商品），对的勾上，点「执行已勾选的」。<br>④ 每一对：先用旧的（停止中、图片齐的）重新出品一件，<b>成功后</b>才删掉图少的那件；失败就不删。<br>建议第一次只勾 1 对试。底部「诊断」能看到每一对没配上的原因。'],
+    ]);
     $('mp-csv').onclick = () => {
       const d = data(); if (!d.items.length) return alert('先抓取一次');
       const q = v => '"' + String(v ?? '').replace(/"/g, '""') + '"';
@@ -2050,6 +2057,22 @@
   }
 
   const thumbOf = r => (/^m\d+$/.test(r.id) ? `https://static.mercdn.net/thumb/item/webp/${r.id}_1.jpg` : '') || (r.thumb && /^https?:/.test(r.thumb) ? r.thumb : '');
+  // 「特殊功能」菜单：每个功能带使用说明
+  function specialMenu(list) {
+    document.getElementById('mbr-special')?.remove();
+    const W = document.createElement('div');
+    W.id = 'mbr-special';
+    W.style.cssText = 'position:fixed;inset:0;z-index:2147483646;background:rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center';
+    W.innerHTML = `<div style="background:#fff;border-radius:10px;padding:16px 18px;width:min(720px,94vw);max-height:90vh;overflow:auto;font-size:14px;color:#222">
+      <div style="display:flex;align-items:center;margin-bottom:10px"><b style="font-size:17px">特殊功能</b><span style="flex:1"></span><button id="sp-x" style="padding:4px 12px;border:1px solid #aaa;border-radius:6px;background:#fff;cursor:pointer">关闭</button></div>
+      ${list.map(([name, bg, , help], i) => `<div style="border:1px solid #eee;border-radius:8px;padding:10px 12px;margin-bottom:10px">
+        <button data-i="${i}" style="padding:7px 16px;border:none;border-radius:6px;background:${bg};color:#fff;cursor:pointer;font-size:15px;font-weight:bold">${name}</button>
+        <div style="margin-top:6px;line-height:1.7;color:#444">${help}</div></div>`).join('')}</div>`;
+    document.body.appendChild(W);
+    W.querySelector('#sp-x').onclick = () => W.remove();
+    W.onclick = e => { if (e.target === W) W.remove(); };
+    W.querySelectorAll('[data-i]').forEach(b => b.onclick = () => { W.remove(); list[+b.dataset.i][2](); });
+  }
   // ============ 销售分析：自动识别同一种商品（主图指纹 + 标题），4 个标签 ============
   const HKEY = 'mbr_imghash';   // { 商品id: 'hex 指纹' }
   // 颜色统一成一个说法
@@ -2301,10 +2324,10 @@
     W.style.cssText = 'position:fixed;inset:20px;z-index:2147483646;background:#fff;border-radius:10px;box-shadow:0 4px 30px rgba(0,0,0,.4);display:flex;flex-direction:column;font-size:14px;color:#222';
     W.innerHTML = `
       <div style="display:flex;gap:8px;align-items:center;padding:8px 12px;border-bottom:1px solid #ddd;flex-wrap:wrap">
-        <b style="font-size:17px">Yahoo!フリマ 助手</b>
+        <b style="font-size:17px">Yahoo!フリマ 助手<span style="color:#999;font-weight:normal;font-size:13px">${typeof GM_info !== 'undefined' ? ' v' + GM_info.script.version : ''}</span></b>
         <button id="fp-scrape" style="${bt('#06c', '#fff')}">抓取</button>
-        <button id="fp-ana" style="${bt('#7a3', '#fff')}">销售分析</button>
-        <button id="fp-csv" style="${bt()}">导出全部商品（CSV）</button>
+        <button id="fp-special" style="${bt('#7a3', '#fff')}">特殊功能 ▾</button>
+        <span style="display:none"><button id="fp-ana"></button><button id="fp-csv"></button></span>
         <span id="fp-at" style="color:#666"></span>
         <span id="fp-stale" style="display:none;background:#e00;color:#fff;font-weight:bold;padding:3px 10px;border-radius:4px"></span>
         <span style="flex:1"></span><button id="fp-close" style="${bt()}">关闭</button></div>
@@ -2414,6 +2437,12 @@
         status: { OPEN: 'public', CLOSE: 'stopped', SOLD: 'sold' }[r.status] };
     });
     $('fp-ana').onclick = () => { const it = toAna(); if (!it.length) return alert('先抓取一次'); if (!it.some(r => r.status === 'sold')) alert('数据里没有已售出，先重新「抓取」一次（新版会连已售出一起抓）'); openAnalysis(it); };
+    $('fp-special').onclick = () => specialMenu([
+      ['销售分析', '#7a3', () => $('fp-ana').click(),
+        '用途：看哪些商品卖得好、断货了（N 个月内卖过、现在没在卖）、滞销、有人点赞没人买。<br>用法：先点「抓取」（会连已售出一起抓），再点这里。第一次要识别主图，フリマ 的图比较大，可能等几分钟。'],
+      ['导出全部商品（CSV）', '#555', () => $('fp-csv').click(),
+        '用途：把抓到的全部商品（标题、状态、价格、浏览、赞、出品时间、成交/更新时间、ID）下载成 CSV，可以发给别的 AI 分析。<br>用法：先「抓取」，再点这里。'],
+    ]);
     $('fp-csv').onclick = () => {
       const it = data().items; if (!it.length) return alert('先抓取一次');
       const q = v => '"' + String(v ?? '').replace(/"/g, '""') + '"';
