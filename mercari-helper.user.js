@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.49
+// @version      5.50
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -1841,17 +1841,20 @@
       const hashes = GM_getValue(HKEY, {});
       for (let i = 0; i < ids.length; i++) {
         const r = items.find(x => x.id === ids[i]);
-        if (r?.thumb && !hashes[r.id]) { $f('fx-st').textContent = `比对主图 ${i + 1}/${ids.length}…`; const h = await imgHash(r.thumb); if (h) hashes[r.id] = h; }
+        if (r && thumbOf(r) && !hashes[r.id]) { $f('fx-st').textContent = `比对主图 ${i + 1}/${ids.length}…`; const h = await imgHash(thumbOf(r)); if (h) hashes[r.id] = h; }
       }
       GM_setValue(HKEY, hashes);
       const hv = id => hashes[id] ? [parseInt(hashes[id].slice(0, 8), 16), parseInt(hashes[id].slice(8), 16)] : null;
       const dist = (a, b) => { const x = hv(a), y = hv(b); return x && y ? hamming(x, y) : null; };
-      const same = (a, b) => { const d = dist(a, b); return d != null && d <= 6; };
+      // 同一对的判断：主图能比对就看主图；比对不了（缩略图取不到）就看时间——再出品时旧的是同一时刻停掉的，「最后更新」天数应该一样（差 ≤1 天）
+      const it = id => items.find(x => x.id === id);
+      const timeClose = (a, b) => { const x = it(a)?.days, y = it(b)?.days; return x != null && y != null && Math.abs(x - y) <= 1; };
+      const same = (a, b) => { const d = dist(a, b); return d != null ? d <= 6 : timeClose(a, b); };
       // 诊断：每个候选（标题一样的 新↔旧）为什么配上 / 没配上
       const diag = [];
       groups.forEach(([, g]) => g.P.forEach(p => g.S.forEach(s => {
         const d = dist(s.id, p.id);
-        const why = cnt[s.id] == null || cnt[p.id] == null ? '张数查不准' : d == null ? '主图没比对上（缺缩略图）' : d > 6 ? `主图不像（差 ${d}）` : cnt[p.id] >= cnt[s.id] ? '张数没变少' : '✓ 配上';
+        const why = cnt[s.id] == null || cnt[p.id] == null ? '张数查不准' : d != null && d > 6 ? `主图不像（差 ${d}）` : d == null && !timeClose(s.id, p.id) ? '没有主图，时间也对不上' : cnt[p.id] >= cnt[s.id] ? '张数没变少' : '✓ 配上' + (d == null ? '（按时间）' : '');
         diag.push(`旧 ${s.id}（${cnt[s.id]}张）↔ 新 ${p.id}（${cnt[p.id]}张）：${why}`);
       })));
       // 3. 配对：标题一样 + 主图同一张；一对一才自动配，分不清的列为「需要手动确认」
@@ -1869,7 +1872,7 @@
       const unknown = ids.filter(id => cnt[id] == null).length;
       $f('fx-st').textContent = `只剩 1 张：${one.length} 对｜少了几张：${fewer.length} 对｜需要手动确认：${manual.length}${unknown ? `｜张数查不准 ${unknown} 件（已排除）` : ''}`;
       const esc = v => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
-      const cell = r => `<td style="padding:4px"><img src="${r.thumb || ''}" style="width:48px;height:48px;object-fit:cover"></td>
+      const cell = r => `<td style="padding:4px"><img src="${thumbOf(r)}" style="width:48px;height:48px;object-fit:cover"></td>
         <td style="padding:4px"><a href="/item/${r.id}" target="_blank" style="color:#222">${esc(r.title)}</a><br><span style="color:#888">${r.id}・${esc(r.upd || '')}</span></td>
         <td style="padding:4px;text-align:center;font-weight:bold">${cnt[r.id]} 张</td>`;
       const table = (rows, label) => !rows.length ? '' : `<h3 style="margin:14px 0 6px">${label}（${rows.length}）</h3>
@@ -2046,6 +2049,7 @@
     if (sessionStorage.mbrOpenPanel && /^\/mypage\/listings/.test(location.pathname)) { delete sessionStorage.mbrOpenPanel; setTimeout(openPanel, 1500); }
   }
 
+  const thumbOf = r => (/^m\d+$/.test(r.id) ? `https://static.mercdn.net/thumb/item/webp/${r.id}_1.jpg` : '') || (r.thumb && /^https?:/.test(r.thumb) ? r.thumb : '');
   // ============ 销售分析：自动识别同一种商品（主图指纹 + 标题），4 个标签 ============
   const HKEY = 'mbr_imghash';   // { 商品id: 'hex 指纹' }
   // 颜色统一成一个说法
@@ -2155,12 +2159,12 @@
 
     // 主图指纹：算过的存起来，只算新的
     const hashes = GM_getValue(HKEY, {});
-    const need = items.filter(r => r.thumb && !hashes[r.id]);
+    const need = items.filter(r => thumbOf(r) && !hashes[r.id]);
     for (let i = 0; i < need.length; i += 8) {
       if (!document.getElementById('mbr-ana')) return;
       $('an-body').textContent = `第一次需要识别商品主图：${i}/${need.length}（算过的会记住，下次很快）…`;
       const part = need.slice(i, i + 8);
-      const hs = await Promise.all(part.map(r => imgHash(r.thumb)));
+      const hs = await Promise.all(part.map(r => imgHash(thumbOf(r))));
       part.forEach((r, k) => { if (hs[k]) hashes[r.id] = hs[k]; });
       if (i % 200 === 0) GM_setValue(HKEY, hashes);
     }
