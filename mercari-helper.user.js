@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.46
+// @version      5.47
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -107,6 +107,26 @@
       const ok = await waitFor(() => btnByText(/出品を再開/) || !/\/sell\/edit\//.test(path()), 15000);
       finishJob(!!ok, ok ? '已再出品，旧的已停止' : '点了停止但没确认成功，请检查');
       if (ok) closeSoon();
+      return;
+    }
+
+    if (j.op === 'stop-del' && j.phase === 'run') {
+      toast('删除图少的那件：先停止…');
+      await waitFor(() => btnByText(/出品を再開|一時停止|出品を停止/), 20000);
+      const stopBtn = btnByText(/一時停止|出品を停止/);
+      if (stopBtn && !btnByText(/出品を再開/)) {
+        await clickWithConfirm(stopBtn, /^(一時停止する|停止する|出品を一時停止する)$/);
+        const st = await waitFor(() => btnByText(/出品を再開/) || !/\/sell\/edit\//.test(path()), 15000);
+        if (!st) { finishJob(false, '停止没成功'); return; }
+        if (!/\/sell\/edit\//.test(path())) { location.href = location.origin + '/sell/edit/' + id; return; }   // 停止后跳走了：回编辑页再删
+      }
+      if (!btnByText(/出品を再開/)) { finishJob(false, '没停下来，不删'); return; }
+      const del = await waitFor(() => document.querySelector('[data-testid="delete-button"]') || btnByText(/この商品を削除する/));
+      if (!del) { finishJob(false, '找不到删除按钮'); return; }
+      await clickWithConfirm(del, /^削除する$/);
+      const gone = await waitFor(() => !/\/sell\/edit\//.test(path()) || !document.querySelector('[data-testid="delete-button"]'), 15000);
+      finishJob(!!gone, gone ? '已删除' : '点了删除但页面没变化，请检查');
+      if (gone) closeSoon();
       return;
     }
 
@@ -1573,6 +1593,7 @@
         <button id="mp-scan" style="${bt()}">全量抓取（约15-20分钟）</button>
         <button id="mp-ana" style="${bt('#7a3', '#fff')}">销售分析</button>
         <button id="mp-csv" style="${bt()}">导出全部商品（CSV）</button>
+        <button id="mp-fix" style="${bt('#f60', '#fff')}">检查再出品图片</button>
         <span id="mp-at" style="color:#666"></span>
         <span id="mp-stale" style="display:none;background:#e00;color:#fff;font-weight:bold;padding:3px 10px;border-radius:4px"></span>
         <span style="flex:1"></span>
@@ -1769,6 +1790,100 @@
     $('mp-qgo').onclick = () => { const q = getQ(); if (q && q.i < q.ids.length) { setQ({ ...q, running: true }); log('继续'); runQueue(); } };
 
     // 在隐藏 iframe 里打开编辑页，看是「出品を再開」（停止中）还是「一時停止」（出品中）
+    // ============ 修复「再出品后图片变少」：先找出来让你核对，勾选后「用旧的重新出品 + 删掉图少的」 ============
+    function headStatus(url) {
+      return new Promise(res => {
+        try { GM_xmlhttpRequest({ method: 'HEAD', url, timeout: 20000, onload: r => res(r.status), onerror: () => res(0), ontimeout: () => res(0) }); }
+        catch (e) { res(0); }
+      });
+    }
+    // 按编号 _1 _2 … 试，第一个取不到的编号前面就是张数；网络出错重试 3 次，还不行返回 null（查不准）
+    async function countImgs(id) {
+      let n = 0;
+      for (let i = 1; i <= 20; i++) {
+        let st = 0;
+        for (let k = 0; k < 3; k++) { st = await headStatus(`https://static.mercdn.net/item/detail/orig/photos/${id}_${i}.jpg`); if (st) break; await sleep(1000); }
+        if (st === 200) n = i; else if (st === 404 || st === 403) break; else return null;
+      }
+      return n;
+    }
+    async function openFixDialog() {
+      const items = data().items;
+      if (!items.length) return alert('先「全量抓取」一次');
+      const norm = t => String(t || '').trim();
+      const stopped = items.filter(r => r.status === 'stopped');
+      const byTitle = {};
+      stopped.forEach(r => (byTitle[norm(r.title)] = byTitle[norm(r.title)] || { S: [], P: [] }).S.push(r));
+      items.filter(r => r.status === 'public' && r.days != null && r.days <= 14 && byTitle[norm(r.title)]).forEach(r => byTitle[norm(r.title)].P.push(r));
+      const groups = Object.entries(byTitle).filter(([, g]) => g.P.length);
+      if (!groups.length) return alert('没找到「标题一样、新的在 14 天内出品、旧的停止中」的商品。');
+      const W = document.createElement('div');
+      W.id = 'mbr-fix';
+      W.style.cssText = 'position:fixed;inset:24px;z-index:2147483647;background:#fff;border-radius:10px;box-shadow:0 4px 30px rgba(0,0,0,.45);display:flex;flex-direction:column;font-size:14px;color:#222';
+      W.innerHTML = `<div style="display:flex;gap:10px;align-items:center;padding:10px 12px;border-bottom:1px solid #ddd">
+          <b style="font-size:17px">检查再出品图片</b><span id="fx-st" style="color:#666"></span><span style="flex:1"></span>
+          <button id="fx-go" disabled style="padding:6px 14px;border:none;border-radius:6px;background:#e33;color:#fff;cursor:pointer">执行已勾选的</button>
+          <button id="fx-close" style="padding:6px 14px;border:1px solid #aaa;border-radius:6px;background:#fff;cursor:pointer">关闭</button></div>
+        <div id="fx-body" style="flex:1;overflow:auto;padding:8px 12px"></div>`;
+      document.body.appendChild(W);
+      const $f = id => W.querySelector('#' + id);
+      $f('fx-close').onclick = () => W.remove();
+      // 1. 查张数（只查相关的商品）
+      const ids = [...new Set(groups.flatMap(([, g]) => [...g.S, ...g.P].map(r => r.id)))];
+      const cnt = {};
+      for (let i = 0; i < ids.length; i++) {
+        if (!document.getElementById('mbr-fix')) return;
+        $f('fx-st').textContent = `查图片张数 ${i + 1}/${ids.length}…（只查不改）`;
+        cnt[ids[i]] = await countImgs(ids[i]);
+      }
+      // 2. 主图指纹（用列表缩略图，判断是不是同一张照片）
+      const hashes = GM_getValue(HKEY, {});
+      for (let i = 0; i < ids.length; i++) {
+        const r = items.find(x => x.id === ids[i]);
+        if (r?.thumb && !hashes[r.id]) { $f('fx-st').textContent = `比对主图 ${i + 1}/${ids.length}…`; const h = await imgHash(r.thumb); if (h) hashes[r.id] = h; }
+      }
+      GM_setValue(HKEY, hashes);
+      const hv = id => hashes[id] ? [parseInt(hashes[id].slice(0, 8), 16), parseInt(hashes[id].slice(8), 16)] : null;
+      const same = (a, b) => { const x = hv(a), y = hv(b); return x && y && hamming(x, y) <= 6; };
+      // 3. 配对：标题一样 + 主图同一张；一对一才自动配，分不清的列为「需要手动确认」
+      const one = [], fewer = [], manual = [];
+      groups.forEach(([, g]) => {
+        g.P.forEach(p => {
+          const cand = g.S.filter(s => same(s.id, p.id) && cnt[s.id] != null && cnt[p.id] != null && cnt[p.id] < cnt[s.id]);
+          if (!cand.length) return;
+          const pClaims = g.P.filter(p2 => p2 !== p && cand.some(s => same(s.id, p2.id) && cnt[p2.id] != null && cnt[p2.id] < cnt[s.id]));
+          const row = { s: cand[0], p };
+          if (cand.length > 1 || pClaims.length) manual.push({ s: cand, p });
+          else (cnt[p.id] === 1 ? one : fewer).push(row);
+        });
+      });
+      const unknown = ids.filter(id => cnt[id] == null).length;
+      $f('fx-st').textContent = `只剩 1 张：${one.length} 对｜少了几张：${fewer.length} 对｜需要手动确认：${manual.length}${unknown ? `｜张数查不准 ${unknown} 件（已排除）` : ''}`;
+      const esc = v => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
+      const cell = r => `<td style="padding:4px"><img src="${r.thumb || ''}" style="width:48px;height:48px;object-fit:cover"></td>
+        <td style="padding:4px"><a href="/item/${r.id}" target="_blank" style="color:#222">${esc(r.title)}</a><br><span style="color:#888">${r.id}・${esc(r.upd || '')}</span></td>
+        <td style="padding:4px;text-align:center;font-weight:bold">${cnt[r.id]} 张</td>`;
+      const table = (rows, label) => !rows.length ? '' : `<h3 style="margin:14px 0 6px">${label}（${rows.length}）</h3>
+        <table style="width:100%;border-collapse:collapse"><tr style="background:#f0f0f0"><th></th><th colspan="3">旧的（停止中，用它重新出品）</th><th colspan="3">新的（出品中，图少了，会删掉）</th></tr>
+        ${rows.map(x => `<tr style="border-bottom:1px solid #eee"><td><input type="checkbox" class="fx-c" data-s="${x.s.id}" data-p="${x.p.id}"></td>${cell(x.s)}${cell(x.p)}</tr>`).join('')}</table>`;
+      $f('fx-body').innerHTML = `<div style="color:#666">请一对一对核对（点标题打开商品页看），对的勾上，最后点右上角「执行已勾选的」。默认都不勾。<br>
+        执行时每一对：先用旧的重新出品一件（图片齐全），<b>成功后</b>才删掉图少的那件；重新出品失败就不删。</div>`
+        + table(one, '只剩 1 张') + table(fewer, '少了几张（不是 1 张）')
+        + (manual.length ? `<h3 style="margin:14px 0 6px">需要手动确认（${manual.length}）：同一个标题、同一张照片有好几件，分不清是哪一对，不自动处理</h3>`
+          + manual.map(x => `<div>新的 <a href="/item/${x.p.id}" target="_blank">${esc(x.p.title)}</a>（${cnt[x.p.id]} 张）↔ 可能的旧的：${x.s.map(s => `<a href="/item/${s.id}" target="_blank">${s.id}</a>（${cnt[s.id]} 张）`).join('、')}</div>`).join('') : '');
+      const upd = () => { const n = W.querySelectorAll('.fx-c:checked').length; $f('fx-go').disabled = !n; $f('fx-go').textContent = `执行已勾选的（${n} 对）`; };
+      W.addEventListener('change', upd); upd();
+      $f('fx-go').onclick = () => {
+        const sel = [...W.querySelectorAll('.fx-c:checked')].map(c => [c.dataset.s, c.dataset.p]);
+        if (!sel.length) return;
+        if (getQ()?.running) return alert('还有队列在运行，先暂停或等它结束。');
+        if (!confirm(`执行 ${sel.length} 对：\n每一对先用旧的重新出品（图片齐全），成功后删掉图少的那件。\n删除不能恢复。确定开始？`)) return;
+        setQ({ op: 'fix', label: '修复图少的再出品', ids: sel.map(x => x[0]), pairs: Object.fromEntries(sel), i: 0, running: true, ok: 0, ng: 0 });
+        W.remove();
+        log(`开始修复 ${sel.length} 对`);
+        runQueue();
+      };
+    }
     async function checkStatus(id) {
       const f = document.createElement('iframe');
       f.style.cssText = 'position:fixed;left:-5000px;top:0;width:1000px;height:800px';
@@ -1790,6 +1905,20 @@
     setInterval(() => { if (busy) GM_setValue('mbr_qhb', Date.now()); }, 15000);
     // 关掉这个标签页 = 放弃这次队列，下次回来重新设置
     window.addEventListener('pagehide', () => { if (busy) GM_setValue(QUEUE, null); });
+    // 派一件后台任务并等结果
+    async function runJob(op, id, phase, url, active, limitSec) {
+      const token = Math.random().toString(36).slice(2);
+      setJob({ op, id, phase, token });
+      const tab = GM_openInTab(location.origin + url, { active, insert: true });
+      for (let t = 0; t < limitSec; t++) {
+        await sleep(1000);
+        const jj = getJob();
+        if (jj && jj.token === token && (jj.phase === 'done' || jj.phase === 'error')) { if (jj.phase === 'done') { try { tab.close(); } catch (e) {} } return jj; }
+        if (!getQ()?.running) break;
+      }
+      try { tab.close(); } catch (e) {}
+      return null;
+    }
     async function runQueue() {
       if (busy) return; busy = true;
       GM_setValue('mbr_qhb', Date.now());
@@ -1802,6 +1931,24 @@
             break;
           }
           const id = q.ids[q.i];
+          if (q.op === 'fix') {
+            const P = q.pairs[id];
+            log(`${id}：用旧的重新出品…`);
+            const rA = await runJob('relist', id, 'clone', '/item/' + id, true, 240);
+            let ok = false, msg;
+            if (rA?.phase === 'done') {
+              log(`${id}：重新出品成功，删除图少的 ${P}…`);
+              const rB = await runJob('stop-del', P, 'run', '/sell/edit/' + P, true, 90);
+              ok = rB?.phase === 'done';
+              msg = ok ? `完成：已重新出品（图片齐全），图少的 ${P} 已删除` : `新的已出品，但图少的 ${P} 没删掉（${rB?.msg || '超时'}），请手动删`;
+            } else msg = `重新出品失败（${rA?.msg || '超时'}），图少的 ${P} 没动`;
+            log(`${id}：${msg}`);
+            if (!getQ()) break;
+            const q2 = getQ();
+            setQ({ ...q2, i: q2.i + 1, ok: q2.ok + (ok ? 1 : 0), ng: q2.ng + (ok ? 0 : 1) });
+            if (q2.i + 1 < q2.ids.length) await sleep(rand(BATCH_GAP_MIN, BATCH_GAP_MAX) * 1000);
+            continue;
+          }
           const token = Math.random().toString(36).slice(2);
           const first = { relist: 'clone', 'del-stopped': 'run', 'del-sold': 'run' }[q.op];
           setJob({ op: q.op, id, phase: first, token });
@@ -1855,6 +2002,7 @@
       } finally { busy = false; showQ(); render(); }
     }
 
+    $('mp-fix').onclick = () => openFixDialog();
     $('mp-csv').onclick = () => {
       const d = data(); if (!d.items.length) return alert('先抓取一次');
       const q = v => '"' + String(v ?? '').replace(/"/g, '""') + '"';
