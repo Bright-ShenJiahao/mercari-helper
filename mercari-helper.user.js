@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.63
+// @version      5.64
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -1897,18 +1897,16 @@
       };
     }
     // ============ 核对说明：标题里的颜色 / 厚度 / 尾号，和说明（前半部分、第一行）对不对得上 ============
-    async function openDescCheck() {
+    async function openDescCheck(force) {
+      const cachedDC = GM_getValue('mbr_res_desc', null);
+      if (!force && cachedDC) return dcWindow(cachedDC);
       const ans = prompt('核对范围：\n・填数字 = 最近几小时内出品的（修复那批填 4）\n・填 0 或留空 = 全部出品中的商品（约 2000 件，要 20~40 分钟）', '0');
       if (ans === null) return;
       const hrs = +ans || 0;
       const ageH = u => { const s = String(u || '').normalize('NFKC'); const m = s.match(/(\d+)\s*(分|時間|日|か月|ヶ月|ケ月|年)/); return !m ? 1e9 : m[2] === '分' ? +m[1] / 60 : m[2] === '時間' ? +m[1] : m[2] === '日' ? +m[1] * 24 : m[2] === '年' ? +m[1] * 8760 : +m[1] * 720; };
       const list = data().items.filter(r => r.status === 'public' && (!hrs || ageH(r.upd) <= hrs));
       if (!list.length) return alert('没找到这段时间内出品的商品（先「快速刷新」一次）');
-      const W = document.createElement('div');
-      W.style.cssText = 'position:fixed;inset:24px;z-index:2147483647;background:#fff;border-radius:10px;box-shadow:0 4px 30px rgba(0,0,0,.45);display:flex;flex-direction:column;font-size:14px;color:#222';
-      W.innerHTML = `<div style="display:flex;gap:10px;align-items:center;padding:10px 12px;border-bottom:1px solid #ddd"><b style="font-size:17px">核对说明</b><span id="dc-st" style="color:#666"></span><span style="flex:1"></span><button id="dc-x" style="padding:5px 12px">关闭</button></div>
-        <div id="dc-out" style="flex:1;overflow:auto;padding:8px 12px"></div>`;
-      document.body.appendChild(W);
+      const W = dcShell();
       let stop = false;
       W.querySelector('#dc-x').onclick = () => { stop = true; W.remove(); };
       const N = s => String(s || '').normalize('NFKC');
@@ -1947,13 +1945,44 @@
       };
       for (let i = 0; i < list.length; i += 3) { if (stop) return; await Promise.all(list.slice(i, i + 3).map(checkOne)); await sleep(300); }
       const esc = v => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
-      W.querySelector('#dc-st').textContent = `${hrs ? `最近 ${hrs} 小时出品的` : '全部出品中的'} ${list.length} 件，有问题 ${bad.length} 件`;
+      const res = { at: Date.now(), label: hrs ? `最近 ${hrs} 小时出品的` : '全部出品中的', total: list.length, bad: bad.map(x => ({ r: { id: x.r.id, title: x.r.title }, why: x.why })) };
+      GM_setValue('mbr_res_desc', res);
+      W.remove();
+      dcWindow(res);
+    }
+    function dcShell() {
+      document.getElementById('mbr-dc')?.remove();
+      const W = document.createElement('div');
+      W.id = 'mbr-dc';
+      W.style.cssText = 'position:fixed;inset:24px;z-index:2147483647;background:#fff;border-radius:10px;box-shadow:0 4px 30px rgba(0,0,0,.45);display:flex;flex-direction:column;font-size:14px;color:#222';
+      W.innerHTML = `<div style="display:flex;gap:10px;align-items:center;padding:10px 12px;border-bottom:1px solid #ddd"><b style="font-size:17px">核对说明</b><span id="dc-st" style="color:#666"></span><span style="flex:1"></span>
+        <button id="dc-redo" style="padding:5px 12px">重新检查</button><button id="dc-x" style="padding:5px 12px">关闭</button></div>
+        <div id="dc-out" style="flex:1;overflow:auto;padding:8px 12px"></div>`;
+      document.body.appendChild(W);
+      W.querySelector('#dc-redo').onclick = () => { W.remove(); openDescCheck(true); };
+      return W;
+    }
+    function dcWindow(res) {
+      const W = dcShell();
+      W.querySelector('#dc-x').onclick = () => W.remove();
+      const marks = GM_getValue('mbr_done_marks', {});
+      const isDone = id => !!marks['desc:' + id];
+      const bad = [...res.bad].sort((a, b) => isDone(a.r.id) - isDone(b.r.id));
+      const hrs = 0, list = { length: res.total };
+      const esc = v => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
+      W.querySelector('#dc-st').innerHTML = `<b>${new Date(res.at).toLocaleString()} 的结果</b>｜${res.label} ${list.length} 件，有问题 ${bad.length} 件｜<b id="dc-prog" style="color:#090">已处理 ${bad.filter(x => isDone(x.r.id)).length} / ${bad.length}</b>`;
       W.querySelector('#dc-out').innerHTML = `<div style="color:#666;margin-bottom:6px;line-height:1.7">说明：以<b>标题为准</b>（修复时标题用的是原商品自己的，说明和图片是来源商品的）。<br>
         只比对说明的前半部分（后面的关键词列表不看）；说明里没写颜色 / 厚度 / 海绵 / 尾号的不算问题。<br>
         改法：点「改说明」打开编辑页 → 按红字提示改说明（有需要就删掉不对的图片）→ 点页面最下面的「変更する」保存。</div>
         <table style="width:100%;border-collapse:collapse"><tr style="background:#f0f0f0"><th style="text-align:left">标题</th><th style="text-align:left">哪里不对 → 怎么改</th><th></th></tr>
-        ${bad.map(x => `<tr style="border-bottom:1px solid #eee"><td style="padding:4px">${esc(x.r.title)}<br><span style="color:#888">${x.r.id}</span></td><td style="padding:4px;color:#c00">${x.why.map(esc).join('<br>')}</td>
+        ${bad.map(x => `<tr class="dc-row" style="border-bottom:1px solid #eee;${isDone(x.r.id) ? 'opacity:.4' : ''}"><td style="padding:4px"><label style="font-size:12px;color:#090;margin-right:6px"><input type="checkbox" class="dc-done" data-id="${x.r.id}" ${isDone(x.r.id) ? 'checked' : ''}>已处理</label>${esc(x.r.title)}<br><span style="color:#888">${x.r.id}</span></td><td style="padding:4px;color:#c00">${x.why.map(esc).join('<br>')}</td>
           <td><a href="/sell/edit/${x.r.id}" target="_blank" style="padding:4px 10px;border:1px solid #06c;border-radius:6px;color:#06c;text-decoration:none">改说明</a></td></tr>`).join('')}</table>`;
+    
+      W.querySelectorAll('.dc-done').forEach(c => c.onchange = () => {
+        const m = GM_getValue('mbr_done_marks', {}); if (c.checked) m['desc:' + c.dataset.id] = Date.now(); else delete m['desc:' + c.dataset.id];
+        GM_setValue('mbr_done_marks', m); c.closest('.dc-row').style.opacity = c.checked ? 0.4 : 1;
+        W.querySelector('#dc-prog').textContent = `已处理 ${[...W.querySelectorAll('.dc-done')].filter(x => x.checked).length} / ${bad.length}`;
+      });
     }
     function openFixHistory() {
       const W = document.createElement('div');
@@ -2018,25 +2047,39 @@
       const all = GM_getValue('mbr_shopcache2', {}); all[url] = { at: Date.now(), items }; GM_setValue('mbr_shopcache2', all);
       return items;
     }
-    async function openSingleDialog() {
+    async function openSingleDialog(force) {
       const items = data().items;
+      const cached = GM_getValue('mbr_res_single', null);
+      if (!force && cached) return showSingle(null, cached);
       if (!items.some(r => r.status === 'public')) return alert('先「全量抓取」一次');
       const age = Math.floor((Date.now() - (data().at || 0)) / 60e3);
       if (age >= 10 && !confirm(`数据是 ${age} 分钟前抓取的。这期间删掉或改过的商品还会出现在结果里。\n建议先「快速刷新」或「全量抓取」再检查。\n\n仍然用旧数据检查吗？（执行时每件还会再确认商品还在不在）`)) return;
+      return showSingle(null, null);
+    }
+    function singleShell() {
       const W = document.createElement('div');
       W.id = 'mbr-single';
       W.style.cssText = 'position:fixed;inset:24px;z-index:2147483647;background:#fff;border-radius:10px;box-shadow:0 4px 30px rgba(0,0,0,.45);display:flex;flex-direction:column;font-size:14px;color:#222';
       const b2 = 'padding:6px 14px;border:1px solid #aaa;border-radius:6px;background:#fff;cursor:pointer';
       W.innerHTML = `<div style="display:flex;gap:10px;align-items:center;padding:10px 12px;border-bottom:1px solid #ddd">
           <b style="font-size:17px">找出只有 1 张图的商品</b><span id="sg-st" style="color:#666"></span><span style="flex:1"></span>
+          <button id="sg-redo" style="${b2}">重新检查</button>
           <button id="sg-all" style="${b2}">全选</button><button id="sg-none" style="${b2}">全不选</button>
           <button id="sg-go" disabled style="padding:6px 14px;border:none;border-radius:6px;background:#e33;color:#fff;cursor:pointer">执行已勾选的</button>
           <button id="sg-close" style="${b2}">关闭</button></div>
         <div id="sg-body" style="flex:1;overflow:auto;padding:8px 12px"></div>`;
       document.body.appendChild(W);
+      return W;
+    }
+    async function showSingle(W0, cached) {
+      document.getElementById('mbr-single')?.remove();
+      const W = singleShell();
+      const items = data().items;
       const $s = id => W.querySelector('#' + id);
       let stop = false;
       $s('sg-close').onclick = () => { stop = true; W.remove(); };
+      $s('sg-redo').onclick = () => { stop = true; W.remove(); openSingleDialog(true); };
+      if (cached) return renderSingle(cached);
       // 1. 每件出品中的商品只查「第 2 张图在不在」
       const pub = items.filter(r => r.status === 'public');
       const has2 = {};
@@ -2120,14 +2163,30 @@
       }
       for (const id in fCnt) cntCache['f:' + id] = fCnt[id];
       GM_setValue(HKEY, hashes);
+      // 结果保存下来，下次打开直接显示，不用重跑
+      const slim = r => r && { id: r.id, title: r.title, price: r.price, status: r.status, thumb: r.thumb, flea: r.flea, shop: r.shop };
+      const res = { at: Date.now(), nPub: pub.length, nSingles: singles.length, unknown, noFlea: !fitems.length,
+        rows: rows.map(x => ({ p: slim(x.p), found: x.found.map(slim), near: (x.near || []).map(n => ({ c: slim(n.c), why: n.why })) })),
+        cnt: Object.fromEntries(Object.entries(cntCache)) };
+      GM_setValue('mbr_res_single', res);
+      renderSingle(res);
+      return;
+      // 显示（嵌在 showSingle 里，能用 W / $s）
+      function renderSingle(res) {
+      const rows = res.rows, cntCache = res.cnt, unknown = res.unknown, fitems = res.noFlea ? [] : [1];
+      const pub = { length: res.nPub }, singles = { length: res.nSingles };
+      const marks = GM_getValue('mbr_done_marks', {});
+      const isDone = id => !!marks['single:' + id];
+      rows.sort((a, b) => isDone(a.p.id) - isDone(b.p.id));
       const ok = rows.filter(x => x.found.length), none = rows.filter(x => !x.found.length);
-      $s('sg-st').textContent = `出品中 ${pub.length} 件里只有 1 张图的：${singles.length} 件｜找到来源 ${ok.length}｜没找到 ${none.length}${unknown ? `｜查不准 ${unknown} 件（已排除）` : ''}`;
+      const nDone = rows.filter(x => isDone(x.p.id)).length;
+      $s('sg-st').innerHTML = `<b>${new Date(res.at).toLocaleString()} 的结果</b>｜只有 1 张图：${singles.length} 件（找到来源 ${ok.length}｜没找到 ${none.length}）｜<b style="color:#090">已处理 ${nDone} / ${rows.length}</b>${unknown ? `｜查不准 ${unknown} 件` : ''}`;
       const esc = v => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
       const ST = { public: '出品中', stopped: '停止中', sold: '已售出' };
       $s('sg-body').innerHTML = `<div style="color:#666;line-height:1.7">请一件件核对：左边是只有 1 张图的商品；右边选一个「同一种、图片齐全」的来源（默认选图最多的）。对的勾上，点「执行已勾选的」。<br>
         执行时：<b>只借来源的图片</b>，标题、说明、类别、状态、配送、价格全部用左边这件自己的，重新出品一件；成功后才删掉左边只有 1 张图的那件。来源商品不会被停止或改动。</div>
         ${ok.length ? `<table style="width:100%;border-collapse:collapse;margin-top:8px"><tr style="background:#f0f0f0"><th></th><th colspan="2">只有 1 张图（会删掉）</th><th>选来源（图片齐全，只读图片）</th></tr>
-        ${ok.map((x, i) => `<tr style="border-bottom:1px solid #eee;vertical-align:top"><td><input type="checkbox" class="sg-c" data-i="${i}"></td>
+        ${ok.map((x, i) => `<tr class="sg-row" style="border-bottom:1px solid #eee;vertical-align:top;${isDone(x.p.id) ? 'opacity:.4' : ''}"><td><label style="font-size:12px;color:#090;white-space:nowrap"><input type="checkbox" class="sg-done" data-id="${x.p.id}" ${isDone(x.p.id) ? 'checked' : ''}>已处理</label><br><input type="checkbox" class="sg-c" data-i="${i}" title="勾选 = 执行时处理这件"></td>
           <td style="padding:4px"><img src="${thumbOf(x.p)}" style="width:48px;height:48px;object-fit:cover"></td>
           <td style="padding:4px"><a href="/item/${x.p.id}" target="_blank" style="color:#222">${esc(x.p.title)}</a><br><span style="color:#888">${x.p.id}・¥${(x.p.price || 0).toLocaleString()}</span></td>
           <td style="padding:4px">${x.found.slice(0, 5).map((c, k) => `<label style="display:flex;gap:6px;align-items:center;margin-bottom:3px"><input type="radio" name="sg-r${i}" value="${c.flea ? 'f:' + c.id : c.id}" ${k === 0 ? 'checked' : ''}>
@@ -2135,7 +2194,8 @@
         ${!fitems.length ? '<div style="color:#c60;margin-top:8px">提示：还没抓取过 Yahoo!フリマ 的商品，所以没去 フリマ 找来源。先去 フリマ「出品した商品」页面用面板「抓取」一次，再回来点这个功能。</div>' : ''}
         ${none.length ? `<h3 style="margin:14px 0 6px">没找到来源（${none.length}）：煤炉和 フリマ 都没找到，可能本来就只拍了 1 张，需要你手动处理</h3>`
           + `<div style="color:#666;margin-bottom:6px">下面每件列出最接近的 3 个候选和没选上的原因。你认得出是同一种（只是照片 / 写法不同）的，可以勾上、选它当来源（只借图片，说明标题都用你这件的）。只有 1 张图的候选不能选。</div>`
-          + none.map(x => { const i = ok.length + none.indexOf(x); return `<div style="border-bottom:1px solid #eee;padding:6px 0;display:flex;gap:8px">
+          + none.map(x => { const i = ok.length + none.indexOf(x); return `<div class="sg-row" style="border-bottom:1px solid #eee;padding:6px 0;display:flex;gap:8px;${isDone(x.p.id) ? 'opacity:.4' : ''}">
+              <label style="font-size:12px;color:#090;white-space:nowrap"><input type="checkbox" class="sg-done" data-id="${x.p.id}" ${isDone(x.p.id) ? 'checked' : ''}>已处理</label>
               <input type="checkbox" class="sg-c" data-i="${i}" ${x.near.some(n => cntCache[n.c.id] >= 2) ? '' : 'disabled'}>
               <img src="${thumbOf(x.p)}" style="width:44px;height:44px;object-fit:cover"><div style="flex:1"><a href="/item/${x.p.id}" target="_blank">${esc(x.p.title)}</a>（${x.p.id}）
               ${x.near.map(n => `<label style="display:flex;gap:6px;align-items:center;margin-top:3px;color:#555"><input type="radio" name="sg-r${i}" value="${n.c.id}" ${cntCache[n.c.id] >= 2 ? '' : 'disabled'}>
@@ -2156,6 +2216,15 @@
         log(`开始修复 ${sel.length} 件`);
         runQueue();
       };
+    
+      // 「已处理」：勾了记住，变灰，下次排到最后
+      W.querySelectorAll('.sg-done').forEach(c => c.onchange = () => {
+        const m = GM_getValue('mbr_done_marks', {}); if (c.checked) m['single:' + c.dataset.id] = Date.now(); else delete m['single:' + c.dataset.id];
+        GM_setValue('mbr_done_marks', m); c.closest('.sg-row').style.opacity = c.checked ? 0.4 : 1;
+        const n = [...W.querySelectorAll('.sg-done')].filter(x => x.checked).length;
+        const b = $s('sg-st').querySelector('b[style*="090"]'); if (b) b.textContent = `已处理 ${n} / ${rows.length}`;
+      });
+      }
     }
     // 商品还在不在：在后台打开它的编辑页看（删掉的商品图片还会留在服务器上，所以不能靠图片判断）
     async function existsCheck(id) {
@@ -2335,9 +2404,9 @@
       ['导出全部商品（CSV）', '#555', () => $('mp-csv').click(),
         '用途：把抓到的全部商品（标题、状态、价格、浏览、赞、最后更新、ID）下载成 Excel 能打开的 CSV，可以发给别的 AI 分析。<br>用法：先「全量抓取」，再点这里。'],
       ['找出只有 1 张图的商品', '#c33', () => openSingleDialog(),
-        '用途：找出所有「出品中、但只有 1 张图」的商品（包括旧商品已经删掉、上面那个功能配不上对的）。<br>用法：<br>① 先「全量抓取」。<br>② 点这里：只查不改。先查每件有没有第 2 张图（2000 件约 10~20 分钟），再给每件找「标题像 + 主图同一张 + 有 2 张以上」的商品当来源（出品中 / 停止中 / 已售出都可以）。<br>③ 你一件件核对，右边可以换来源，对的勾上，点「执行已勾选的」。<br>④ 每件：用来源的图片重新出品（<b>标题、价格用原来那件的</b>），成功后才删掉只有 1 张图的那件；来源商品不动。<br>「没找到来源」的单独列出，可能本来就只拍了 1 张，需要手动处理。'],
+        '用途：找出所有「出品中、但只有 1 张图」的商品（包括旧商品已经删掉、上面那个功能配不上对的）。<br>用法：<br>① 先「全量抓取」。<br>② 点这里：只查不改。先查每件有没有第 2 张图（2000 件约 10~20 分钟），再给每件找「标题像 + 主图同一张 + 有 2 张以上」的商品当来源（出品中 / 停止中 / 已售出都可以）。<br>③ 你一件件核对，右边可以换来源，对的勾上，点「执行已勾选的」。<br>④ 每件：用来源的图片重新出品（<b>标题、价格用原来那件的</b>），成功后才删掉只有 1 张图的那件；来源商品不动。<br>「没找到来源」的单独列出，可能本来就只拍了 1 张，需要手动处理。<br><b>结果会保存</b>：下次打开直接显示上次的结果，想要最新的点「重新检查」。每件有「已处理」勾选框，勾了会记住、变灰、排到最后。'],
       ['核对说明（颜色 / 厚度 / 尾号）', '#06c', () => openDescCheck(),
-        '用途：找出「标题和说明对不上」的商品——颜色、厚度、OX / 带海绵不一样，或者标题尾号和说明第一行的尾号不一样。<br>用法：先「快速刷新」，再点这里，输入要核对最近几小时内出品的（修复那批大约从凌晨 2:38 开始，填 4 左右）。只读不改，每件在后台打开编辑页读说明，100 件约 5~10 分钟。<br>结果只列有问题的，点「改说明」打开编辑页手动改。'],
+        '用途：找出「标题和说明对不上」的商品——颜色、厚度、OX / 带海绵不一样，或者标题尾号和说明第一行的尾号不一样。<br>用法：先「快速刷新」，再点这里，输入要核对最近几小时内出品的（修复那批大约从凌晨 2:38 开始，填 4 左右）。只读不改，每件在后台打开编辑页读说明，100 件约 5~10 分钟。<br>结果只列有问题的，点「改说明」打开编辑页手动改。<br><b>结果会保存</b>：下次打开直接显示，想要最新的点「重新检查」。每件有「已处理」勾选框，勾了会记住、变灰。'],
       ['修复记录（核对说明）', '#06c', () => openFixHistory(),
         '用途：5.57 及以前的「找出只有 1 张图的商品」有个错误：<b>说明、状态、配送用的是来源商品的</b>（只有标题和价格是自己的），颜色、厚度可能对不上。这里列出那批商品，方便你逐件核对改说明。<br>用法：在面板右边日志里，从「开始修复 N 件」往后全部复制，粘贴到这里的框里，点「整理」。会列出：新商品的标题（=原来的标题）、当时用的来源（标题、ID，点开看来源的说明）。你按标题找到新商品，对照改说明。<br>5.58 以后只借图片，不会再有这个问题。'],
       ['设置参考店铺', '#a0a', () => { const u = prompt('「找出只有 1 张图的商品」找来源时，还会去这些店铺找（只借图片）。\n填店铺主页链接（https://jp.mercari.com/user/profile/数字），好几个用逗号隔开，留空 = 不用：', GM_getValue('mbr_shopurl', SHOP_DEFAULT)); if (u !== null) { GM_setValue('mbr_shopurl', u.trim()); GM_setValue('mbr_shopcache2', {}); } },
