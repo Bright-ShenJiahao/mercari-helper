@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/Bright-ShenJiahao/mercari-helper
 // @updateURL    https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/Bright-ShenJiahao/mercari-helper/main/mercari-helper.user.js
-// @version      5.62
+// @version      5.63
 // @description  メルカリ商品を Yahoo!フリマ・ヤフオクへ複製出品／一括再出品・一括削除。抓取全部商品、批量再出品、批量删除；一键复制到三个平台
 // @match        https://jp.mercari.com/*
 // @match        https://paypayfleamarket-sec.yahoo.co.jp/*
@@ -1980,6 +1980,44 @@
       };
     }
     // ============ 找出所有「只有 1 张图」的出品中商品，找同一种、图片齐全的商品当来源 ============
+    const SHOP_DEFAULT = 'https://jp.mercari.com/user/profile/979774619, https://jp.mercari.com/user/profile/425953204';   // 老婆的店、朋友的店（照片经店主同意使用）
+    // 可以填好几个店铺（一行一个 / 逗号隔开）
+    async function loadShop(say) {
+      const urls = String(GM_getValue('mbr_shopurl', SHOP_DEFAULT) || '').split(/[\s,，、]+/).filter(u => /\/user\/profile\/\d+/.test(u));
+      const out = [];
+      for (const u of urls) { try { (await loadOneShop(u, say)).forEach(r => out.push(r)); } catch (e) {} }
+      return out;
+    }
+    async function loadOneShop(url, say) {
+      const caches = GM_getValue('mbr_shopcache2', {});
+      const cache = caches[url];
+      if (cache && Date.now() - cache.at < 6 * 3600e3) return cache.items;
+      const f = document.createElement('iframe');
+      f.style.cssText = 'position:fixed;left:-5000px;top:0;width:1200px;height:900px';
+      f.src = url;
+      document.body.appendChild(f);
+      await new Promise(r => f.onload = r);
+      const d = () => f.contentDocument;
+      await waitFor(() => d()?.querySelector('a[href*="/item/m"]'), 30000);
+      let last = 0, same = 0;
+      for (let k = 0; k < 200 && same < 3; k++) {
+        const n = d().querySelectorAll('a[href*="/item/m"]').length;
+        say?.(`读取参考店铺（${url.match(/\d+$/)?.[0] || ''}）的商品 ${n}…`);
+        same = n === last ? same + 1 : 0; last = n;
+        const more = [...d().querySelectorAll('button')].find(b => b.textContent.trim() === 'もっと見る');
+        if (!more) break;
+        more.click();
+        await sleep(1500);
+      }
+      const items = [...new Map([...d().querySelectorAll('a[href*="/item/m"]')].map(a => {
+        const id = (a.getAttribute('href').match(/m\d+/) || [])[0];
+        const lab = a.querySelector('[aria-label$="のサムネイル"]')?.getAttribute('aria-label') || '';
+        return [id, { id, title: lab.replace(/のサムネイル$/, ''), status: 'shop', shop: true, thumb: '' }];
+      })).values()].filter(r => r.id && r.title);
+      f.remove();
+      const all = GM_getValue('mbr_shopcache2', {}); all[url] = { at: Date.now(), items }; GM_setValue('mbr_shopcache2', all);
+      return items;
+    }
     async function openSingleDialog() {
       const items = data().items;
       if (!items.some(r => r.status === 'public')) return alert('先「全量抓取」一次');
@@ -2020,22 +2058,42 @@
       const bg = r => bgCache[r.id] || (bgCache[r.id] = bigrams(sigOf(r.title)));
       const cntCache = {};
       const rows = [];
+      let shopItems = [];
+      try { shopItems = await loadShop(t => { $s('sg-st').textContent = t; }); } catch (e) {}
+      const own = new Set(items.map(r => r.id));
+      const pool = [...items, ...shopItems.filter(r => !own.has(r.id))];
       for (let i = 0; i < singles.length; i++) {
         if (stop) return;
         const p = singles[i];
         $s('sg-st').textContent = `找来源 ${i + 1}/${singles.length}…`;
         const pb = bg(p), ph = await getH(p);
-        const cand = items.filter(r => r.id !== p.id && has2[r.id] !== false && colorOk(colorsOf(baseNorm(r.title)), colorsOf(baseNorm(p.title))) && spongeOk(r.title, p.title) && jacc(pb, bg(r)) >= 0.5);
+        const scored = pool.filter(r => r.id !== p.id && has2[r.id] !== false).map(r => ({ r, j: jacc(pb, bg(r)) })).filter(x => x.j >= 0.3).sort((a, b) => b.j - a.j);
+        const cand = scored.filter(x => x.j >= 0.5 && colorOk(colorsOf(baseNorm(x.r.title)), colorsOf(baseNorm(p.title))) && spongeOk(x.r.title, p.title)).map(x => x.r);
         const found = [];
-        for (const c of cand.slice(0, 30)) {
+        for (const c of cand.slice(0, 100)) {
           const ch = await getH(c);
           if (!ph || !ch || hamming(ph, ch) > 6) continue;
           if (!(c.id in cntCache)) cntCache[c.id] = await countImgs(c.id);
           if (cntCache[c.id] >= 2) found.push(c);
         }
-        const ord = { stopped: 0, public: 1, sold: 2 };
+        const ord = { stopped: 0, public: 1, sold: 2, shop: 3 };
         found.sort((a, b) => cntCache[b.id] - cntCache[a.id] || ord[a.status] - ord[b.status]);
-        rows.push({ p, found });
+        // 没找到时：最接近的 3 个，写明为什么没选上
+        let near = [];
+        if (!found.length) {
+          for (const x of scored.slice(0, 3)) {
+            const c = x.r, why = [];
+            if (x.j < 0.5) why.push(`标题只像 ${Math.round(x.j * 100)}%`);
+            if (!colorOk(colorsOf(baseNorm(c.title)), colorsOf(baseNorm(p.title)))) why.push('颜色不同');
+            if (!spongeOk(c.title, p.title)) why.push('OX / 带海绵不同');
+            const ch = await getH(c); const dd = ph && ch ? hamming(ph, ch) : null;
+            if (dd == null) why.push('主图没法比对'); else if (dd > 6) why.push(`主图不像（差 ${dd}）`);
+            if (!(c.id in cntCache)) cntCache[c.id] = await countImgs(c.id);
+            if (!(cntCache[c.id] >= 2)) why.push(`只有 ${cntCache[c.id] ?? '?'} 张`);
+            near.push({ c, why });
+          }
+        }
+        rows.push({ p, found, near });
       }
       // 煤炉里没找到的：去 Yahoo!フリマ 的商品里找（需要先在 フリマ 面板抓取过）
       const fitems = GM_getValue('mbr_fitems', { items: [] }).items || [];
@@ -2073,16 +2131,23 @@
           <td style="padding:4px"><img src="${thumbOf(x.p)}" style="width:48px;height:48px;object-fit:cover"></td>
           <td style="padding:4px"><a href="/item/${x.p.id}" target="_blank" style="color:#222">${esc(x.p.title)}</a><br><span style="color:#888">${x.p.id}・¥${(x.p.price || 0).toLocaleString()}</span></td>
           <td style="padding:4px">${x.found.slice(0, 5).map((c, k) => `<label style="display:flex;gap:6px;align-items:center;margin-bottom:3px"><input type="radio" name="sg-r${i}" value="${c.flea ? 'f:' + c.id : c.id}" ${k === 0 ? 'checked' : ''}>
-            <img src="${c.flea ? c.thumb : thumbOf(c)}" style="width:36px;height:36px;object-fit:cover"><b>${c.flea ? cntCache['f:' + c.id] : cntCache[c.id]} 张</b>・${c.flea ? '<b style="color:#f03">フリマ</b>' : '煤炉'}・${ST[c.status] || ''}・<a href="${c.flea ? 'https://paypayfleamarket.yahoo.co.jp/item/' + c.id : '/item/' + c.id}" target="_blank" style="color:#222">${esc(c.title)}</a></label>`).join('')}</td></tr>`).join('')}</table>` : ''}
+            <img src="${c.flea ? c.thumb : thumbOf({ id: c.id })}" style="width:36px;height:36px;object-fit:cover"><b>${c.flea ? cntCache['f:' + c.id] : cntCache[c.id]} 张</b>・${c.flea ? '<b style="color:#f03">フリマ</b>' : c.shop ? '<b style="color:#a0a">参考店铺</b>' : '煤炉・' + (ST[c.status] || '')}・<a href="${c.flea ? 'https://paypayfleamarket.yahoo.co.jp/item/' + c.id : '/item/' + c.id}" target="_blank" style="color:#222">${esc(c.title)}</a></label>`).join('')}</td></tr>`).join('')}</table>` : ''}
         ${!fitems.length ? '<div style="color:#c60;margin-top:8px">提示：还没抓取过 Yahoo!フリマ 的商品，所以没去 フリマ 找来源。先去 フリマ「出品した商品」页面用面板「抓取」一次，再回来点这个功能。</div>' : ''}
         ${none.length ? `<h3 style="margin:14px 0 6px">没找到来源（${none.length}）：煤炉和 フリマ 都没找到，可能本来就只拍了 1 张，需要你手动处理</h3>`
-          + none.map(x => `<div><a href="/item/${x.p.id}" target="_blank">${esc(x.p.title)}</a>（${x.p.id}）</div>`).join('') : ''}`;
+          + `<div style="color:#666;margin-bottom:6px">下面每件列出最接近的 3 个候选和没选上的原因。你认得出是同一种（只是照片 / 写法不同）的，可以勾上、选它当来源（只借图片，说明标题都用你这件的）。只有 1 张图的候选不能选。</div>`
+          + none.map(x => { const i = ok.length + none.indexOf(x); return `<div style="border-bottom:1px solid #eee;padding:6px 0;display:flex;gap:8px">
+              <input type="checkbox" class="sg-c" data-i="${i}" ${x.near.some(n => cntCache[n.c.id] >= 2) ? '' : 'disabled'}>
+              <img src="${thumbOf(x.p)}" style="width:44px;height:44px;object-fit:cover"><div style="flex:1"><a href="/item/${x.p.id}" target="_blank">${esc(x.p.title)}</a>（${x.p.id}）
+              ${x.near.map(n => `<label style="display:flex;gap:6px;align-items:center;margin-top:3px;color:#555"><input type="radio" name="sg-r${i}" value="${n.c.id}" ${cntCache[n.c.id] >= 2 ? '' : 'disabled'}>
+                <img src="${thumbOf({ id: n.c.id })}" style="width:32px;height:32px;object-fit:cover">${n.c.shop ? '<b style="color:#a0a">参考店铺</b>・' : ''}<a href="/item/${n.c.id}" target="_blank" style="color:#333">${esc(n.c.title)}</a>
+                <span style="color:#c60">（${n.why.join('、') || '?'}）</span></label>`).join('') || '<span style="color:#999">没有相近的商品</span>'}</div></div>`; }).join('') : ''}`;
       const upd = () => { const n = W.querySelectorAll('.sg-c:checked').length; $s('sg-go').disabled = !n; $s('sg-go').textContent = `执行已勾选的（${n} 件）`; };
       W.addEventListener('change', upd); upd();
       $s('sg-all').onclick = () => { W.querySelectorAll('.sg-c').forEach(c => { c.checked = true; }); upd(); };
       $s('sg-none').onclick = () => { W.querySelectorAll('.sg-c').forEach(c => { c.checked = false; }); upd(); };
       $s('sg-go').onclick = () => {
-        const sel = [...W.querySelectorAll('.sg-c:checked')].map(c => { const x = ok[+c.dataset.i]; const src = W.querySelector(`input[name="sg-r${c.dataset.i}"]:checked`)?.value; return { src, bad: x.p.id, title: x.p.title, price: x.p.price }; }).filter(x => x.src);
+        const all = [...ok, ...none];
+        const sel = [...W.querySelectorAll('.sg-c:checked')].map(c => { const x = all[+c.dataset.i]; const src = W.querySelector(`input[name="sg-r${c.dataset.i}"]:checked`)?.value; return { src, bad: x.p.id, title: x.p.title, price: x.p.price }; }).filter(x => x.src);
         if (!sel.length) return;
         if (getQ()?.running) return alert('还有队列在运行，先暂停或等它结束。');
         if (!confirm(`执行 ${sel.length} 件：\n只借来源的图片，其他（标题、说明、价格…）全用原来那件的，重新出品；成功后删掉只有 1 张图的那件。\n来源商品不动。删除不能恢复。确定开始？`)) return;
@@ -2263,6 +2328,7 @@
     { const g = GM_getValue('mbr_qgap', { min: 10, max: 10 }); $('mp-g1').value = g.min; $('mp-g2').value = g.max;
       const save = () => { let a = Math.max(5, +$('mp-g1').value || 10), b = Math.max(a, +$('mp-g2').value || a); $('mp-g1').value = a; $('mp-g2').value = b; GM_setValue('mbr_qgap', { min: a, max: b }); };
       $('mp-g1').onchange = save; $('mp-g2').onchange = save; }
+    const esc0 = v => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
     $('mp-special').onclick = () => specialMenu([
       ['销售分析', '#7a3', () => $('mp-ana').click(),
         '用途：看哪些商品卖得好、断货了、滞销、有人点赞没人买。<br>用法：先点「全量抓取」（要包含已售出），再点这里。第一次要识别主图，会等几分钟，之后很快。<br>4 个标签：畅销榜｜断货提醒（N 个月内卖过、现在没在卖）｜滞销｜有人看没人买。每个都能导出 CSV。点一行展开看每一件。'],
@@ -2274,6 +2340,8 @@
         '用途：找出「标题和说明对不上」的商品——颜色、厚度、OX / 带海绵不一样，或者标题尾号和说明第一行的尾号不一样。<br>用法：先「快速刷新」，再点这里，输入要核对最近几小时内出品的（修复那批大约从凌晨 2:38 开始，填 4 左右）。只读不改，每件在后台打开编辑页读说明，100 件约 5~10 分钟。<br>结果只列有问题的，点「改说明」打开编辑页手动改。'],
       ['修复记录（核对说明）', '#06c', () => openFixHistory(),
         '用途：5.57 及以前的「找出只有 1 张图的商品」有个错误：<b>说明、状态、配送用的是来源商品的</b>（只有标题和价格是自己的），颜色、厚度可能对不上。这里列出那批商品，方便你逐件核对改说明。<br>用法：在面板右边日志里，从「开始修复 N 件」往后全部复制，粘贴到这里的框里，点「整理」。会列出：新商品的标题（=原来的标题）、当时用的来源（标题、ID，点开看来源的说明）。你按标题找到新商品，对照改说明。<br>5.58 以后只借图片，不会再有这个问题。'],
+      ['设置参考店铺', '#a0a', () => { const u = prompt('「找出只有 1 张图的商品」找来源时，还会去这些店铺找（只借图片）。\n填店铺主页链接（https://jp.mercari.com/user/profile/数字），好几个用逗号隔开，留空 = 不用：', GM_getValue('mbr_shopurl', SHOP_DEFAULT)); if (u !== null) { GM_setValue('mbr_shopurl', u.trim()); GM_setValue('mbr_shopcache2', {}); } },
+        '现在是：' + esc0(GM_getValue('mbr_shopurl', SHOP_DEFAULT)) + '<br><b>只填店主同意你用他照片的店铺</b>（家人、说好了的朋友）。没经过同意用别人拍的照片，违反煤炉规则，会被删商品 / 处罚账号。店铺商品读一次会记住 6 小时。'],
       ['检查再出品图片', '#f60', () => $('mp-fix').click(),
         '用途：批量再出品后，新商品的图片比原来少（比如只剩 1 张）时用来修复。<br>用法：<br>① 先抓取（抓取时间要比出问题的那次再出品晚）。<br>② 点这里：只查不改，找出「标题一样、新的图少了」的新旧对，列成对照表。<br>③ 你一对对核对（点标题看商品），对的勾上，点「执行已勾选的」。<br>④ 每一对：先用旧的（停止中、图片齐的）重新出品一件，<b>成功后</b>才删掉图少的那件；失败就不删。<br>建议第一次只勾 1 对试。底部「诊断」能看到每一对没配上的原因。'],
     ]);
